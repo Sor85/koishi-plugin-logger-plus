@@ -1,0 +1,83 @@
+{
+  "name": "logger-plus",
+  "description": "Dump log files for Koishi and show them in the console",
+  "version": "0.1.0",
+  "type": "commonjs",
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "require": "./lib/index.js",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "dist",
+    "src"
+  ],
+  "license": "AGPL-3.0",
+  "scripts": {
+    "clean": "shx rm -rf lib dist *.tsbuildinfo client/*.tsbuildinfo",
+    "build": "npm run build:server && npm run build:client",
+    "build:types": "tsc -p tsconfig.json",
+    "build:server": "npm run build:types && tsup src/index.ts --format cjs --sourcemap --out-dir lib --clean false",
+    "build:client": "vite build --config vite.config.mts",
+    "lint": "eslint src client --ext .ts,.vue",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "bot",
+    "chatbot",
+    "koishi",
+    "plugin",
+    "logs",
+    "logger"
+  ],
+  "koishi": {
+    "public": [
+      "dist"
+    ],
+    "description": {
+      "en": "Dump log files and show them in the console",
+      "zh": "保存日志文件并在控制台中显示"
+    },
+    "service": {
+      "optional": [
+        "console"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@koishijs/plugin-console": "^5.30.11",
+    "koishi": "^4.18.11"
+  },
+  "peerDependenciesMeta": {
+    "@koishijs/plugin-console": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@koishijs/console": "^5.30.11"
+  },
+  "devDependencies": {
+    "@koishijs/client": "^5.30.11",
+    "@koishijs/plugin-config": "^2.8.6",
+    "@types/node": "^25.0.9",
+    "@vitejs/plugin-vue": "^5.1.4",
+    "ansi_up": "^5.2.1",
+    "eslint": "^8.57.0",
+    "koishi": "^4.18.11",
+    "reggol": "^1.7.1",
+    "sass": "^1.82.0",
+    "shx": "^0.4.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.6.2",
+    "unocss": "^0.65.1",
+    "vite": "^5.4.10",
+    "vue": "^3.5.12",
+    "yaml": "^2.8.2"
+  }
+}
