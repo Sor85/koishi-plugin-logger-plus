@@ -1,5 +1,5 @@
 {
-  "name": "logger-plus",
+  "name": "koishi-plugin-logger-plus",
   "description": "Dump log files for Koishi and show them in the console",
   "version": "0.1.0",
   "type": "commonjs",
