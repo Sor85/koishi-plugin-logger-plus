@@ -37,12 +37,13 @@ import { Time, store } from '@koishijs/client'
 import {} from '@koishijs/plugin-config'
 import Logger from 'reggol'
 import ansi from 'ansi_up'
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onMounted, ref, watch } from 'vue'
 
 const props = defineProps<{
   logs: Logger.Record[],
   showLink?: boolean,
   maxHeight?: string,
+  resetFollowOnEnter?: boolean,
 }>()
 
 // this package does not have consistent exports in different environments
@@ -74,14 +75,18 @@ function updateViewingLatest() {
   lastScrollTop = element.scrollTop
 }
 
+function followLatest() {
+  isFollowing.value = true
+  isViewingLatest.value = true
+  nextTick(() => requestAnimationFrame(scrollToBottom))
+}
+
 function toggleFollow() {
   if (isFollowing.value) {
     isFollowing.value = false
     return
   }
-  isFollowing.value = true
-  isViewingLatest.value = true
-  nextTick(() => requestAnimationFrame(scrollToBottom))
+  followLatest()
 }
 
 function handleScroll() {
@@ -98,6 +103,10 @@ function handleScroll() {
 
 onMounted(() => {
   requestAnimationFrame(scrollToBottom)
+})
+
+onActivated(() => {
+  if (props.resetFollowOnEnter) followLatest()
 })
 
 watch(() => props.logs.length, async () => {
