@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-logger-plus",
   "description": "Dump log files for Koishi and show them in the console",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "type": "commonjs",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
