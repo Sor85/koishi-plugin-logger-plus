@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-logger-plus",
-  "description": "Dump log files for Koishi and show them in the console",
+  "description": "增强版 Koishi 控制台日志插件，支持过滤日志、自动暂停追踪。",
   "version": "0.0.1",
   "type": "commonjs",
   "main": "lib/index.js",
@@ -19,6 +19,14 @@
     "src"
   ],
   "license": "AGPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sor85/koishi-plugin-logger-plus.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Sor85/koishi-plugin-logger-plus/issues"
+  },
+  "homepage": "https://github.com/Sor85/koishi-plugin-logger-plus#readme",
   "scripts": {
     "clean": "shx rm -rf lib dist *.tsbuildinfo client/*.tsbuildinfo",
     "build": "npm run build:server && npm run build:client",
@@ -41,8 +49,8 @@
       "dist"
     ],
     "description": {
-      "en": "Dump log files and show them in the console",
-      "zh": "保存日志文件并在控制台中显示"
+      "en": "Enhanced Koishi console logger with filtering, auto-follow, and copy actions",
+      "zh": "增强版 Koishi 控制台日志插件，支持过滤、自动追踪和复制"
     },
     "service": {
       "optional": [
