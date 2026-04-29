@@ -4,7 +4,7 @@
 -->
 <template>
   <div class="logger-container">
-    <button class="logger-follow" type="button" @click="toggleFollow">
+    <button :class="['logger-follow', { visible: showFollowStatus }]" type="button" @click="toggleFollow">
       {{ isFollowing ? '暂停追踪' : '继续追踪' }}
     </button>
     <div
@@ -64,7 +64,9 @@ const showTime = 'yyyy-MM-dd hh:mm:ss'
 const logList = ref<HTMLElement | null>(null)
 const isFollowing = ref(true)
 const isViewingLatest = ref(true)
+const showFollowStatus = ref(false)
 let lastScrollTop = 0
+let followStatusTimer: ReturnType<typeof setTimeout> | undefined
 
 const listStyle = computed(() => props.maxHeight ? { maxHeight: props.maxHeight } : {})
 
@@ -81,15 +83,29 @@ function updateViewingLatest() {
   lastScrollTop = element.scrollTop
 }
 
+function revealFollowStatus() {
+  showFollowStatus.value = true
+  clearTimeout(followStatusTimer)
+  followStatusTimer = setTimeout(() => {
+    showFollowStatus.value = false
+  }, 1600)
+}
+
+function setFollowing(value: boolean) {
+  if (isFollowing.value === value) return
+  isFollowing.value = value
+  revealFollowStatus()
+}
+
 function followLatest() {
-  isFollowing.value = true
+  setFollowing(true)
   isViewingLatest.value = true
   nextTick(() => requestAnimationFrame(scrollToBottom))
 }
 
 function toggleFollow() {
   if (isFollowing.value) {
-    isFollowing.value = false
+    setFollowing(false)
     return
   }
   followLatest()
@@ -101,9 +117,9 @@ function handleScroll() {
   const previousScrollTop = lastScrollTop
   updateViewingLatest()
   if (element.scrollTop < previousScrollTop) {
-    isFollowing.value = false
+    setFollowing(false)
   } else if (isViewingLatest.value) {
-    isFollowing.value = true
+    setFollowing(true)
   }
 }
 
@@ -195,6 +211,14 @@ function renderLine(record: Logger.Record) {
   padding: 0.25rem 0.5rem;
   line-height: 1.25rem;
   cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+
+  &.visible,
+  &:hover,
+  &:focus-visible {
+    opacity: 1;
+  }
 
   &:hover {
     color: var(--terminal-fg-hover);
