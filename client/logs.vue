@@ -19,13 +19,19 @@
         :class="{ line: true, start: isStart(index) }"
       >
         <code v-html="renderLine(record)"></code>
-        <router-link
-          class="log-link inline-flex items-center justify-center absolute w-20px h-20px bottom-0 right-0"
-          v-if="showLink && store.config && store.packages && record.meta?.paths?.length"
-          :to="'/plugins/' + record.meta.paths[0].replace(/\./, '/')"
-        >
-          <k-icon name="arrow-right"/>
-        </router-link>
+        <span class="log-actions">
+          <button class="log-action" type="button" title="复制整段日志" @click="copyLine(record)">
+            <k-icon name="activity:copy"/>
+          </button>
+          <router-link
+            class="log-action"
+            v-if="showLink && store.config && store.packages && record.meta?.paths?.length"
+            :to="'/plugins/' + record.meta.paths[0].replace(/\./, '/')"
+            title="前往插件配置"
+          >
+            <k-icon name="arrow-right"/>
+          </router-link>
+        </span>
       </div>
     </div>
   </div>
@@ -33,7 +39,7 @@
 
 <script lang="ts" setup>
 
-import { Time, store } from '@koishijs/client'
+import { Time, message, store } from '@koishijs/client'
 import {} from '@koishijs/plugin-config'
 import Logger from 'reggol'
 import ansi from 'ansi_up'
@@ -121,18 +127,51 @@ function isStart(index: number) {
   return index > 0 && props.logs[index - 1].id > props.logs[index].id && props.logs[index].name === 'app'
 }
 
-function renderLine(record: Logger.Record) {
+function formatLine(record: Logger.Record, color = false) {
   const prefix = `[${record.type[0].toUpperCase()}]`
   const space = ' '
   let indent = 3 + space.length, output = ''
   indent += showTime.length + space.length
-  output += renderColor(8, Time.template(showTime, new Date(record.timestamp))) + space
+  output += (color ? renderColor(8, Time.template(showTime, new Date(record.timestamp))) : Time.template(showTime, new Date(record.timestamp))) + space
   const code = Logger.code(record.name, { colors: 3 })
-  const label = renderColor(code, record.name, ';1')
+  const label = color ? renderColor(code, record.name, ';1') : record.name
   const padLength = label.length - record.name.length
   output += prefix + space + label.padEnd(padLength) + space
   output += record.content.replace(/\n/g, '\n' + ' '.repeat(indent))
-  return converter.ansi_to_html(output)
+  return output
+}
+
+async function writeClipboard(text: string) {
+  if (window.isSecureContext && navigator.clipboard) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  try {
+    const copied = document.execCommand('copy')
+    if (!copied) throw new Error('copy failed')
+  } finally {
+    textarea.remove()
+  }
+}
+
+async function copyLine(record: Logger.Record) {
+  try {
+    await writeClipboard(formatLine(record))
+    message.success('已复制日志')
+  } catch {
+    message.error('复制失败')
+  }
+}
+
+function renderLine(record: Logger.Record) {
+  return converter.ansi_to_html(formatLine(record, true))
 }
 
 </script>
@@ -191,7 +230,7 @@ function renderLine(record: Logger.Record) {
   }
 
   .line {
-    padding: 0 0.5rem;
+    padding: 0 3rem 0 0.5rem;
     border-radius: 2px;
     font-size: 14px;
     line-height: 20px;
@@ -204,10 +243,45 @@ function renderLine(record: Logger.Record) {
       background-color: var(--terminal-bg-hover);
     }
 
+    &:hover .log-actions,
+    &:focus-within .log-actions {
+      opacity: 1;
+    }
+
     ::selection {
       background-color: var(--terminal-bg-selection);
     }
   }
+
+  .log-actions {
+    position: absolute;
+    right: 0.25rem;
+    bottom: 0;
+    display: inline-flex;
+    align-items: center;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+
+  .log-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    color: inherit;
+    background: transparent;
+    border: none;
+    padding: 0 0.25rem;
+    cursor: pointer;
+    line-height: 20px;
+    text-decoration: none;
+
+    &:hover {
+      color: var(--terminal-fg-hover);
+    }
+  }
+
 }
 
 </style>
