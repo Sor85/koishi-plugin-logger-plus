@@ -4,8 +4,9 @@
 -->
 <template>
   <div class="logger-container">
-    <button :class="['logger-follow', { visible: showFollowStatus }]" type="button" @click="toggleFollow">
-      {{ isFollowing ? '暂停追踪' : '继续追踪' }}
+    <button :class="['logger-follow', { visible: showFollowStatus, active: isFollowing }]" type="button" @click="toggleFollow">
+      <span class="logger-follow-dot"></span>
+      {{ isFollowing ? '追踪中' : '已暂停' }}
     </button>
     <div
       ref="logList"
@@ -203,16 +204,25 @@ function renderLine(record: Logger.Record) {
   position: absolute;
   top: 0.75rem;
   right: 1rem;
-  z-index: 1;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
   color: var(--terminal-fg);
-  background-color: var(--terminal-bg-hover);
+  color: color-mix(in srgb, var(--terminal-fg) 82%, transparent);
+  background: var(--terminal-bg-hover);
+  background: color-mix(in srgb, var(--terminal-bg-hover) 86%, transparent);
   border: 1px solid var(--terminal-separator);
-  border-radius: 4px;
-  padding: 0.25rem 0.5rem;
+  border-color: color-mix(in srgb, var(--terminal-separator) 70%, var(--terminal-fg));
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
   line-height: 1.25rem;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s ease, color 0.15s ease;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 18%), inset 0 1px 0 rgb(255 255 255 / 8%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
 
   &.visible,
   &:hover,
@@ -220,9 +230,26 @@ function renderLine(record: Logger.Record) {
     opacity: 1;
   }
 
-  &:hover {
+  &:hover,
+  &:focus-visible {
     color: var(--terminal-fg-hover);
+    background: var(--terminal-bg-hover);
+    background: color-mix(in srgb, var(--terminal-bg-hover) 72%, var(--terminal-bg));
+    border-color: var(--terminal-separator);
   }
+
+  &.active .logger-follow-dot {
+    background: #22c55e;
+    box-shadow: 0 0 12px #22c55e;
+  }
+}
+
+.logger-follow-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: #f59e0b;
+  box-shadow: 0 0 12px #f59e0b;
 }
 
 .log-list {
