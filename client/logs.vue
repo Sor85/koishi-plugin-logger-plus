@@ -84,9 +84,10 @@ function updateViewingLatest() {
   lastScrollTop = element.scrollTop
 }
 
-function revealFollowStatus() {
+function updateFollowStatusVisibility() {
   showFollowStatus.value = true
   clearTimeout(followStatusTimer)
+  if (!isFollowing.value) return
   followStatusTimer = setTimeout(() => {
     showFollowStatus.value = false
   }, 1600)
@@ -95,7 +96,7 @@ function revealFollowStatus() {
 function setFollowing(value: boolean) {
   if (isFollowing.value === value) return
   isFollowing.value = value
-  revealFollowStatus()
+  updateFollowStatusVisibility()
 }
 
 function followLatest() {
