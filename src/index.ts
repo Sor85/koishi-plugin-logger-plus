@@ -1,11 +1,63 @@
 import { Context, Dict, Logger, remove, Schema, Time } from 'koishi'
 import { DataService } from '@koishijs/plugin-console'
 import { resolve } from 'path'
-import { mkdir, readdir, rm } from 'fs/promises'
+import { mkdir, readdir, readFile, rm } from 'fs/promises'
 import { FileWriter } from './file'
 import zhCN from './locales/zh-CN'
 
+const RECENT_LOGS_TIME_RANGE = Time.day
+const LOG_PAGE_SIZE = 200
+
+interface LogPage {
+  logs: Logger.Record[]
+  cursor?: string
+  hasMore: boolean
+}
+
+function parseRecords(text: string): Logger.Record[] {
+  return text.split('\n').map((line) => {
+    try {
+      return JSON.parse(line) as Logger.Record
+    } catch {}
+  }).filter((record): record is Logger.Record => !!record)
+}
+
+function compareRecords(left: Logger.Record, right: Logger.Record) {
+  return left.timestamp - right.timestamp || left.id - right.id
+}
+
+function createLogCursor(record: Logger.Record) {
+  return `${record.timestamp}:${record.id}`
+}
+
+function isBeforeCursor(record: Logger.Record, cursor?: string) {
+  if (!cursor) return true
+  const [timestamp, id] = cursor.split(':').map(Number)
+  return record.timestamp < timestamp || record.timestamp === timestamp && record.id < id
+}
+
+function filterRecentLogs(records: Logger.Record[]) {
+  const cutoff = Date.now() - RECENT_LOGS_TIME_RANGE
+  return records
+    .filter(record => record.timestamp >= cutoff)
+    .sort(compareRecords)
+}
+
+function createLogPage(records: Logger.Record[], cursor?: string): LogPage {
+  const candidates = records.filter(record => isBeforeCursor(record, cursor))
+  const logs = candidates.slice(-LOG_PAGE_SIZE)
+  return {
+    logs,
+    cursor: logs[0] ? createLogCursor(logs[0]) : cursor,
+    hasMore: candidates.length > logs.length,
+  }
+}
+
 declare module '@koishijs/console' {
+  interface Events {
+    'logger-plus/load-before'(cursor?: string): Promise<LogPage>
+  }
+
   namespace Console {
     interface Services {
       logs: DataService<Logger.Record[]>
@@ -16,7 +68,7 @@ declare module '@koishijs/console' {
 export const name = 'logger-plus'
 
 class LogProvider extends DataService<Logger.Record[]> {
-  constructor(ctx: Context, private getWriter: () => FileWriter) {
+  constructor(ctx: Context, private getLogs: () => Promise<Logger.Record[]>) {
     super(ctx, 'logs', { authority: 4 })
 
     ctx.console.addEntry(process.env.KOISHI_BASE ? [
@@ -29,7 +81,7 @@ class LogProvider extends DataService<Logger.Record[]> {
   }
 
   async get() {
-    return this.getWriter()?.read()
+    return this.getLogs()
   }
 }
 
@@ -37,6 +89,7 @@ export interface Config {
   root?: string
   maxAge?: number
   maxSize?: number
+  showRecentLogsOnStartup?: boolean
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -46,6 +99,7 @@ export const Config: Schema<Config> = Schema.object({
   }).default('data/logs'),
   maxAge: Schema.natural().default(30),
   maxSize: Schema.natural().default(1024 * 100),
+  showRecentLogsOnStartup: Schema.boolean().default(false),
 }).i18n({
   'zh-CN': zhCN,
 })
@@ -81,8 +135,38 @@ export async function apply(ctx: Context, config: Config) {
     }
   }
 
+  async function readRecentLogs() {
+    await writer?.task
+    const cutoff = Date.now() - RECENT_LOGS_TIME_RANGE
+    const records: Logger.Record[] = []
+    for (const [date, indexes] of Object.entries(files)) {
+      if (+new Date(date) + Time.day < cutoff) continue
+      for (const index of indexes) {
+        const text = await readFile(`${root}/${date}-${index}.log`, 'utf8').catch((error) => {
+          ctx.logger('logger-plus').warn(error)
+          return ''
+        })
+        records.push(...parseRecords(text))
+      }
+    }
+    return filterRecentLogs(records)
+  }
+
+  async function loadRecentLogPage(cursor?: string) {
+    if (!config.showRecentLogsOnStartup) return { logs: [], hasMore: false }
+    return createLogPage(await readRecentLogs(), cursor)
+  }
+
+  async function getLogs() {
+    if (config.showRecentLogsOnStartup) return (await loadRecentLogPage()).logs
+    return writer ? writer.read() : []
+  }
+
   const date = new Date().toISOString().slice(0, 10)
-  createFile(date, Math.max(...files[date] ?? [0]) + 1)
+  const index = Math.max(...files[date] ?? [0]) + 1
+  files[date] ??= []
+  files[date].push(index)
+  createFile(date, index)
 
   let buffer: Logger.Record[] = []
   const update = ctx.throttle(() => {
@@ -104,23 +188,26 @@ export async function apply(ctx: Context, config: Config) {
       const date = new Date(record.timestamp).toISOString().slice(0, 10)
       if (writer.date !== date) {
         writer.close()
-        files[date] = [1]
-        createFile(date, 1)
+        const nextIndex = Math.max(...files[date] ?? [0]) + 1
+        files[date] ??= []
+        files[date].push(nextIndex)
+        createFile(date, nextIndex)
       }
       writer.write(record)
       buffer.push(record)
       update()
       if (writer.size >= config.maxSize) {
         writer.close()
-        const index = Math.max(...files[date] ?? [0]) + 1
+        const nextIndex = Math.max(...files[date] ?? [0]) + 1
         files[date] ??= []
-        files[date].push(index)
-        createFile(date, index)
+        files[date].push(nextIndex)
+        createFile(date, nextIndex)
       }
     },
   }
 
   Logger.targets.push(target)
+  ctx.get('console')?.addListener('logger-plus/load-before', loadRecentLogPage, { authority: 4 })
   ctx.on('dispose', () => {
     writer?.close()
     remove(Logger.targets, target)
@@ -133,5 +220,5 @@ export async function apply(ctx: Context, config: Config) {
     target.record(record)
   }
 
-  ctx.plugin(LogProvider, () => writer)
+  ctx.plugin(LogProvider, getLogs)
 }

@@ -17,6 +17,7 @@
       <div
         v-for="(record, index) in logs"
         :key="record.id"
+        :data-log-index="index"
         :class="{ line: true, start: isStart(index) }"
       >
         <code v-html="renderLine(record)"></code>
@@ -40,7 +41,7 @@
 
 <script lang="ts" setup>
 
-import { Time, message, store } from '@koishijs/client'
+import { Time, message, send, store } from '@koishijs/client'
 import {} from '@koishijs/plugin-config'
 import Logger from 'reggol'
 import ansi from 'ansi_up'
@@ -51,7 +52,14 @@ const props = defineProps<{
   showLink?: boolean,
   maxHeight?: string,
   resetFollowOnEnter?: boolean,
+  loadBefore?: boolean,
 }>()
+
+interface LogPage {
+  logs: Logger.Record[]
+  cursor?: string
+  hasMore: boolean
+}
 
 // this package does not have consistent exports in different environments
 const converter = new (ansi['default'] || ansi)()
@@ -66,6 +74,9 @@ const logList = ref<HTMLElement | null>(null)
 const isFollowing = ref(true)
 const isViewingLatest = ref(true)
 const showFollowStatus = ref(false)
+const loadingBefore = ref(false)
+const loadCursor = ref<string | undefined>()
+const hasMoreBefore = ref(true)
 let lastScrollTop = 0
 let followStatusTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -113,11 +124,46 @@ function toggleFollow() {
   followLatest()
 }
 
+async function loadBeforeLogs() {
+  const element = logList.value
+  if (!element || !props.loadBefore || loadingBefore.value || !hasMoreBefore.value) return
+  const firstLog = props.logs[0]
+  loadingBefore.value = true
+  try {
+    const page = await send('logger-plus/load-before', loadCursor.value ?? (firstLog ? `${firstLog.timestamp}:${firstLog.id}` : undefined)) as LogPage
+    loadCursor.value = page.cursor
+    hasMoreBefore.value = page.hasMore
+    if (!page.logs.length) return
+    store.logs.unshift(...page.logs)
+    await nextTick()
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        const current = logList.value
+        if (current) {
+          const firstLoadedLine = current.querySelector<HTMLElement>('[data-log-index="0"]')
+          const firstOldLine = current.querySelector<HTMLElement>(`[data-log-index="${page.logs.length}"]`)
+          if (firstLoadedLine && firstOldLine) {
+            current.scrollTop = firstOldLine.offsetTop - current.clientHeight + firstLoadedLine.offsetHeight
+          }
+        }
+        resolve()
+      })
+    })
+  } catch {
+    message.error('加载更早日志失败')
+  } finally {
+    loadingBefore.value = false
+  }
+}
+
 function handleScroll() {
   const element = logList.value
   if (!element) return
   const previousScrollTop = lastScrollTop
   updateViewingLatest()
+  if (element.scrollTop < 160) {
+    loadBeforeLogs()
+  }
   if (element.scrollTop < previousScrollTop) {
     setFollowing(false)
   } else if (isViewingLatest.value) {

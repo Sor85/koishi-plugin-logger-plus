@@ -10,7 +10,7 @@
         </option>
       </select>
     </div>
-    <logs :key="selectedPath" class="layout-logger" :logs="filteredLogs" show-link reset-follow-on-enter></logs>
+    <logs :key="selectedPath" class="layout-logger" :logs="filteredLogs" show-link reset-follow-on-enter :load-before="!selectedPath"></logs>
   </k-layout>
 </template>
 
