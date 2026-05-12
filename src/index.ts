@@ -5,7 +5,6 @@ import { mkdir, readdir, readFile, rm } from 'fs/promises'
 import { FileWriter } from './file'
 import zhCN from './locales/zh-CN'
 
-const RECENT_LOGS_TIME_RANGE = Time.day
 const LOG_PAGE_SIZE = 200
 
 interface LogPage {
@@ -36,11 +35,8 @@ function isBeforeCursor(record: Logger.Record, cursor?: string) {
   return record.timestamp < timestamp || record.timestamp === timestamp && record.id < id
 }
 
-function filterRecentLogs(records: Logger.Record[]) {
-  const cutoff = Date.now() - RECENT_LOGS_TIME_RANGE
-  return records
-    .filter(record => record.timestamp >= cutoff)
-    .sort(compareRecords)
+function sortLogs(records: Logger.Record[]) {
+  return records.sort(compareRecords)
 }
 
 function createLogPage(records: Logger.Record[], cursor?: string): LogPage {
@@ -135,12 +131,10 @@ export async function apply(ctx: Context, config: Config) {
     }
   }
 
-  async function readRecentLogs() {
+  async function readSavedLogs() {
     await writer?.task
-    const cutoff = Date.now() - RECENT_LOGS_TIME_RANGE
     const records: Logger.Record[] = []
     for (const [date, indexes] of Object.entries(files)) {
-      if (+new Date(date) + Time.day < cutoff) continue
       for (const index of indexes) {
         const text = await readFile(`${root}/${date}-${index}.log`, 'utf8').catch((error) => {
           ctx.logger('logger-plus').warn(error)
@@ -149,16 +143,16 @@ export async function apply(ctx: Context, config: Config) {
         records.push(...parseRecords(text))
       }
     }
-    return filterRecentLogs(records)
+    return sortLogs(records)
   }
 
-  async function loadRecentLogPage(cursor?: string) {
+  async function loadLogPage(cursor?: string) {
     if (!config.showRecentLogsOnStartup) return { logs: [], hasMore: false }
-    return createLogPage(await readRecentLogs(), cursor)
+    return createLogPage(await readSavedLogs(), cursor)
   }
 
   async function getLogs() {
-    if (config.showRecentLogsOnStartup) return (await loadRecentLogPage()).logs
+    if (config.showRecentLogsOnStartup) return (await loadLogPage()).logs
     return writer ? writer.read() : []
   }
 
@@ -207,7 +201,7 @@ export async function apply(ctx: Context, config: Config) {
   }
 
   Logger.targets.push(target)
-  ctx.get('console')?.addListener('logger-plus/load-before', loadRecentLogPage, { authority: 4 })
+  ctx.get('console')?.addListener('logger-plus/load-before', loadLogPage, { authority: 4 })
   ctx.on('dispose', () => {
     writer?.close()
     remove(Logger.targets, target)
