@@ -13,6 +13,12 @@ interface LogPage {
   hasMore: boolean
 }
 
+interface LogQuery {
+  cursor?: string
+  date?: string
+  path?: string
+}
+
 function parseRecords(text: string): Logger.Record[] {
   return text.split('\n').map((line) => {
     try {
@@ -35,6 +41,19 @@ function isBeforeCursor(record: Logger.Record, cursor?: string) {
   return record.timestamp < timestamp || record.timestamp === timestamp && record.id < id
 }
 
+function normalizeLogQuery(query?: string | LogQuery): LogQuery {
+  if (typeof query === 'string') return { cursor: query }
+  return query ?? {}
+}
+
+function isValidDate(date?: string) {
+  return !date || /^\d{4}-\d{2}-\d{2}$/.test(date)
+}
+
+function getRecordPaths(record: Logger.Record) {
+  return (record.meta as { paths?: string[] } | undefined)?.paths ?? []
+}
+
 function sortLogs(records: Logger.Record[]) {
   return records.sort(compareRecords)
 }
@@ -51,7 +70,7 @@ function createLogPage(records: Logger.Record[], cursor?: string): LogPage {
 
 declare module '@koishijs/console' {
   interface Events {
-    'logger-plus/load-before'(cursor?: string): Promise<LogPage>
+    'logger-plus/load-before'(query?: string | LogQuery): Promise<LogPage>
   }
 
   namespace Console {
@@ -131,10 +150,11 @@ export async function apply(ctx: Context, config: Config) {
     }
   }
 
-  async function readSavedLogs() {
+  async function readSavedLogs(date?: string) {
     await writer?.task
     const records: Logger.Record[] = []
-    for (const [date, indexes] of Object.entries(files)) {
+    const entries = date ? [[date, files[date] ?? []] as [string, number[]]] : Object.entries(files)
+    for (const [date, indexes] of entries) {
       for (const index of indexes) {
         const text = await readFile(`${root}/${date}-${index}.log`, 'utf8').catch((error) => {
           ctx.logger('logger-plus').warn(error)
@@ -146,9 +166,12 @@ export async function apply(ctx: Context, config: Config) {
     return sortLogs(records)
   }
 
-  async function loadLogPage(cursor?: string) {
-    if (!config.showRecentLogsOnStartup) return { logs: [], hasMore: false }
-    return createLogPage(await readSavedLogs(), cursor)
+  async function loadLogPage(query?: string | LogQuery) {
+    const { cursor, date, path } = normalizeLogQuery(query)
+    if (!date && !config.showRecentLogsOnStartup) return { logs: [], hasMore: false }
+    if (!isValidDate(date)) return { logs: [], hasMore: false }
+    const records = (await readSavedLogs(date)).filter(record => !path || getRecordPaths(record).includes(path))
+    return createLogPage(records, cursor)
   }
 
   async function getLogs() {

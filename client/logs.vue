@@ -53,6 +53,13 @@ const props = defineProps<{
   maxHeight?: string,
   resetFollowOnEnter?: boolean,
   loadBefore?: boolean,
+  loadDate?: string,
+  loadPath?: string,
+  loadCursor?: string,
+}>()
+
+const emit = defineEmits<{
+  (name: 'prepend-logs', logs: Logger.Record[]): void
 }>()
 
 interface LogPage {
@@ -78,6 +85,10 @@ const showFollowStatus = ref(false)
 const loadingBefore = ref(false)
 const loadCursor = ref<string | undefined>()
 const hasMoreBefore = ref(true)
+
+watch(() => props.loadCursor, (cursor) => {
+  loadCursor.value = cursor
+})
 let lastScrollTop = 0
 let followStatusTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -144,11 +155,19 @@ async function loadBeforeLogs() {
   const firstLog = props.logs[0]
   loadingBefore.value = true
   try {
-    const page = await send('logger-plus/load-before', loadCursor.value ?? (firstLog ? `${firstLog.timestamp}:${firstLog.id}` : undefined)) as LogPage
+    const page = await send('logger-plus/load-before', {
+      date: props.loadDate || undefined,
+      path: props.loadPath || undefined,
+      cursor: loadCursor.value ?? (firstLog ? `${firstLog.timestamp}:${firstLog.id}` : undefined),
+    }) as LogPage
     loadCursor.value = page.cursor
     hasMoreBefore.value = page.hasMore
     if (!page.logs.length) return
-    store.logs.unshift(...page.logs)
+    if (props.loadDate) {
+      emit('prepend-logs', page.logs)
+    } else {
+      store.logs.unshift(...page.logs)
+    }
     await nextTick()
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => {
