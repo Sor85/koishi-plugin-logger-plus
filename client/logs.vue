@@ -70,6 +70,7 @@ function renderColor(code: number, value: any, decoration = '') {
 }
 
 const showTime = 'yyyy-MM-dd hh:mm:ss'
+const preloadLogThreshold = 150
 const logList = ref<HTMLElement | null>(null)
 const isFollowing = ref(true)
 const isViewingLatest = ref(true)
@@ -124,9 +125,22 @@ function toggleFollow() {
   followLatest()
 }
 
+function getVisibleAnchor(element: HTMLElement) {
+  const lines = Array.from(element.querySelectorAll<HTMLElement>('[data-log-index]'))
+  return lines.find(line => line.offsetTop + line.offsetHeight >= element.scrollTop)
+}
+
+function getVisibleStartIndex(element: HTMLElement) {
+  const anchor = getVisibleAnchor(element)
+  return anchor ? Number(anchor.dataset.logIndex) : props.logs.length
+}
+
 async function loadBeforeLogs() {
   const element = logList.value
   if (!element || !props.loadBefore || loadingBefore.value || !hasMoreBefore.value) return
+  const anchor = getVisibleAnchor(element)
+  const anchorIndex = anchor ? Number(anchor.dataset.logIndex) : undefined
+  const anchorOffset = anchor ? anchor.offsetTop - element.scrollTop : 0
   const firstLog = props.logs[0]
   loadingBefore.value = true
   try {
@@ -139,12 +153,9 @@ async function loadBeforeLogs() {
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => {
         const current = logList.value
-        if (current) {
-          const firstLoadedLine = current.querySelector<HTMLElement>('[data-log-index="0"]')
-          const firstOldLine = current.querySelector<HTMLElement>(`[data-log-index="${page.logs.length}"]`)
-          if (firstLoadedLine && firstOldLine) {
-            current.scrollTop = firstOldLine.offsetTop - current.clientHeight + firstLoadedLine.offsetHeight
-          }
+        const currentAnchor = anchorIndex === undefined ? undefined : current?.querySelector<HTMLElement>(`[data-log-index="${anchorIndex + page.logs.length}"]`)
+        if (current && currentAnchor) {
+          current.scrollTop = currentAnchor.offsetTop - anchorOffset
         }
         resolve()
       })
@@ -161,7 +172,7 @@ function handleScroll() {
   if (!element) return
   const previousScrollTop = lastScrollTop
   updateViewingLatest()
-  if (element.scrollTop < 160) {
+  if (getVisibleStartIndex(element) <= preloadLogThreshold) {
     loadBeforeLogs()
   }
   if (element.scrollTop < previousScrollTop) {
