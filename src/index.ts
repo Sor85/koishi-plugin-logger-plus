@@ -3,7 +3,6 @@ import { DataService } from '@koishijs/plugin-console'
 import { resolve } from 'path'
 import { mkdir, readdir, readFile, rm } from 'fs/promises'
 import { FileWriter } from './file'
-import zhCN from './locales/zh-CN'
 
 const LOG_PAGE_SIZE = 200
 
@@ -111,12 +110,10 @@ export const Config: Schema<Config> = Schema.object({
   root: Schema.path({
     filters: ['directory'],
     allowCreate: true,
-  }).default('data/logs'),
-  maxAge: Schema.natural().default(30),
-  maxSize: Schema.natural().default(1024 * 100),
-  showRecentLogsOnStartup: Schema.boolean().default(false),
-}).i18n({
-  'zh-CN': zhCN,
+  }).default('data/logs').description('存放输出日志的本地目录'),
+  maxAge: Schema.natural().default(30).description('日志文件保存的最大天数'),
+  maxSize: Schema.natural().default(1024 * 100).description('单个日志文件的最大大小'),
+  showRecentLogsOnStartup: Schema.boolean().default(false).description('是否始终展示所有日志。日志加载过多可能影响性能，重启插件即可恢复'),
 })
 
 export async function apply(ctx: Context, config: Config) {

@@ -1,4 +1,0 @@
-root: 存放输出日志的本地目录
-maxAge: 日志文件保存的最大天数
-maxSize: 单个日志文件的最大大小
-showRecentLogsOnStartup: 是否始终展示所有日志。日志加载过多可能影响性能，重启插件即可恢复

@@ -6,7 +6,6 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import unocss from 'unocss/vite'
 import mini from 'unocss/preset-mini'
-import yaml from './vite-yaml'
 
 export default defineConfig({
   build: {
@@ -35,7 +34,6 @@ export default defineConfig({
   },
   plugins: [
     vue(),
-    yaml(),
     unocss({
       presets: [
         mini({
