@@ -1,20 +1,36 @@
 <template>
   <k-layout>
-    <div class="logger-filter">
+    <div
+      ref="filterElement"
+      :class="['logger-filter', { collapsed: isFilterCollapsed }]"
+      @click="expandFilter"
+    >
       <span class="logger-filter-dot"></span>
-      <label for="logger-filter-path">过滤</label>
-      <select id="logger-filter-path" v-model="selectedPath">
+      <label class="logger-filter-summary" for="logger-filter-path">过滤</label>
+      <select id="logger-filter-path" v-model="selectedPath" :tabindex="isFilterCollapsed ? -1 : undefined">
         <option value="">全部插件</option>
         <option v-for="plugin in plugins" :key="plugin.path" :value="plugin.path">
           {{ plugin.label }}
         </option>
       </select>
       <label for="logger-filter-date">日期</label>
-      <button id="logger-filter-date" class="logger-date-trigger" type="button" @click="toggleDatePicker">
+      <button
+        id="logger-filter-date"
+        class="logger-date-trigger"
+        type="button"
+        :tabindex="isFilterCollapsed ? -1 : undefined"
+        @click="toggleDatePicker"
+      >
         <span>{{ selectedDateLabel }}</span>
         <span class="logger-date-icon"></span>
       </button>
-      <button v-if="selectedDate" class="logger-filter-clear" type="button" @click="clearDate">清除</button>
+      <button
+        v-if="selectedDate"
+        class="logger-filter-clear"
+        type="button"
+        :tabindex="isFilterCollapsed ? -1 : undefined"
+        @click="clearDate"
+      >清除</button>
       <div v-if="showDatePicker" class="logger-date-popover">
         <div class="logger-date-header">
           <button type="button" @click="shiftMonth(-1)">‹</button>
@@ -56,7 +72,7 @@
 
 import { send, store } from '@koishijs/client'
 import Logger from 'reggol'
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import Logs from './logs.vue'
 
 interface LogPage {
@@ -70,6 +86,8 @@ const selectedDate = ref('')
 const dateLogs = ref<Logger.Record[]>([])
 const dateCursor = ref<string | undefined>()
 const showDatePicker = ref(false)
+const filterElement = ref<HTMLElement | null>(null)
+const isFilterExpanded = ref(false)
 const visibleMonth = ref(new Date())
 const weekdays = ['一', '二', '三', '四', '五', '六', '日']
 const todayDate = formatDate(new Date())
@@ -153,6 +171,20 @@ const calendarDays = computed(() => {
 
 const filteredLogs = computed(() => selectedDate.value ? dateLogs.value : liveLogs.value)
 
+const hasActiveFilter = computed(() => !!selectedPath.value || !!selectedDate.value)
+
+const isFilterCollapsed = computed(() => !isFilterExpanded.value && !hasActiveFilter.value && !showDatePicker.value)
+
+function expandFilter() {
+  if (isFilterCollapsed.value) isFilterExpanded.value = true
+}
+
+function handleDocumentPointerDown(event: PointerEvent) {
+  if (filterElement.value?.contains(event.target as Node)) return
+  showDatePicker.value = false
+  if (!hasActiveFilter.value) isFilterExpanded.value = false
+}
+
 function toggleDatePicker() {
   showDatePicker.value = !showDatePicker.value
 }
@@ -178,6 +210,7 @@ function prependDateLogs(logs: Logger.Record[]) {
 }
 
 watch([selectedDate, selectedPath], async ([date, path]) => {
+  if (date || path) isFilterExpanded.value = true
   const requestId = ++dateRequestId
   dateLogs.value = []
   dateCursor.value = undefined
@@ -190,6 +223,10 @@ watch([selectedDate, selectedPath], async ([date, path]) => {
   dateLogs.value = page.logs
   dateCursor.value = page.cursor
 })
+
+onMounted(() => document.addEventListener('pointerdown', handleDocumentPointerDown))
+
+onUnmounted(() => document.removeEventListener('pointerdown', handleDocumentPointerDown))
 
 </script>
 
@@ -209,17 +246,85 @@ watch([selectedDate, selectedPath], async ([date, path]) => {
   border: 1px solid var(--terminal-separator);
   border-color: color-mix(in srgb, var(--terminal-separator) 70%, var(--terminal-fg));
   border-radius: 999px;
+  box-sizing: border-box;
+  width: 28rem;
+  max-width: 44rem;
+  min-width: 2.35rem;
+  height: 2.35rem;
+  min-height: 2.35rem;
   padding: 0.35rem 0.45rem 0.35rem 0.65rem;
   line-height: 1.25rem;
   box-shadow: 0 10px 28px rgb(0 0 0 / 18%), inset 0 1px 0 rgb(255 255 255 / 8%);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
+  transition: width 0.18s ease-out, padding 0.18s ease-out, gap 0.18s ease-out, border-color 0.18s ease-out, box-shadow 0.18s ease-out;
+
+  > :not(.logger-filter-dot):not(.logger-filter-summary) {
+    max-width: 14rem;
+    opacity: 1;
+    transform: translateX(0) scale(1);
+    transition: opacity 0.14s ease-out 0.04s, transform 0.18s ease-out, max-width 0.24s ease-out, margin 0.2s ease-out;
+  }
+
+  .logger-filter-summary {
+    transition: color 0.16s ease, opacity 0.16s ease, transform 0.18s ease;
+  }
+
+  &.collapsed {
+    width: 3.85rem;
+    max-width: 44rem;
+    height: 2.35rem;
+    min-height: 2.35rem;
+    gap: 0.4rem;
+    padding: 0.35rem 0.66rem;
+    overflow: hidden;
+    cursor: pointer;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--terminal-bg-hover) 82%, transparent);
+    box-shadow: 0 8px 20px rgb(0 0 0 / 28%), 0 0 0 1px color-mix(in srgb, var(--terminal-separator) 62%, transparent);
+
+    > :not(.logger-filter-dot):not(.logger-filter-summary) {
+      min-width: 0;
+      max-width: 0;
+      width: 0;
+      opacity: 0;
+      margin: 0;
+      padding-left: 0;
+      padding-right: 0;
+      border-width: 0;
+      overflow: hidden;
+      pointer-events: none;
+      transform: translateX(-0.35rem) scale(0.96);
+    }
+
+    .logger-filter-dot {
+      width: 0.42rem;
+      height: 0.42rem;
+      margin: 0;
+      background: color-mix(in srgb, var(--terminal-fg) 86%, transparent);
+      box-shadow: 0 0 12px color-mix(in srgb, var(--terminal-fg) 46%, transparent);
+    }
+
+    .logger-filter-summary {
+      max-width: 2rem;
+      opacity: 1;
+      color: color-mix(in srgb, var(--terminal-fg) 84%, transparent);
+      white-space: nowrap;
+      transform: none;
+    }
+
+    &:hover .logger-filter-dot {
+      background: #22c55e;
+      box-shadow: 0 0 14px color-mix(in srgb, #22c55e 78%, transparent);
+    }
+  }
 
   label {
     color: var(--terminal-fg);
     color: color-mix(in srgb, var(--terminal-fg) 78%, transparent);
     font-size: 12px;
     letter-spacing: 0.04em;
+    white-space: nowrap;
   }
 
   select,
@@ -372,6 +477,7 @@ watch([selectedDate, selectedPath], async ([date, path]) => {
 }
 
 .logger-filter-dot {
+  flex: 0 0 auto;
   width: 0.5rem;
   height: 0.5rem;
   border-radius: 999px;
@@ -379,6 +485,7 @@ watch([selectedDate, selectedPath], async ([date, path]) => {
   background: color-mix(in srgb, var(--terminal-fg-hover) 75%, #22c55e);
   box-shadow: 0 0 12px #22c55e;
   box-shadow: 0 0 12px color-mix(in srgb, var(--terminal-fg-hover) 55%, #22c55e);
+  transition: width 0.16s ease-out, height 0.16s ease-out, background-color 0.16s ease-out, box-shadow 0.16s ease-out;
 }
 
 .logger-filter-clear {
