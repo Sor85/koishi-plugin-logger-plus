@@ -54,7 +54,7 @@
       </div>
     </div>
     <logs
-      :key="`${selectedPath}:${selectedDate}`"
+      :key="`${selectedPath}:${selectedDate}:${historyResetKey}`"
       class="layout-logger"
       :logs="filteredLogs"
       show-link
@@ -62,8 +62,9 @@
       :load-before="!selectedPath || !!selectedDate"
       :load-date="selectedDate"
       :load-path="selectedPath"
-      :load-cursor="dateCursor"
-      @prepend-logs="prependDateLogs"
+      :load-cursor="selectedDate ? dateCursor : historyCursor"
+      @prepend-logs="prependLoadedLogs"
+      @view-logs="resetHistoryUnloadTimer"
     ></logs>
   </k-layout>
 </template>
@@ -83,6 +84,9 @@ interface LogPage {
 
 const selectedPath = ref('')
 const selectedDate = ref('')
+const historyLogs = ref<Logger.Record[]>([])
+const historyCursor = ref<string | undefined>()
+const historyResetKey = ref(0)
 const dateLogs = ref<Logger.Record[]>([])
 const dateCursor = ref<string | undefined>()
 const showDatePicker = ref(false)
@@ -91,7 +95,9 @@ const isFilterExpanded = ref(false)
 const visibleMonth = ref(new Date())
 const weekdays = ['一', '二', '三', '四', '五', '六', '日']
 const todayDate = formatDate(new Date())
+const historyUnloadDelay = 30 * 60 * 1000
 let dateRequestId = 0
+let historyUnloadTimer: ReturnType<typeof setTimeout> | undefined
 
 function formatDate(date: Date) {
   const year = date.getFullYear()
@@ -126,13 +132,28 @@ function findPluginEntry(path: string, plugins: Record<string, any>): { name: st
   }
 }
 
+function findLoggerPlusConfig(plugins: Record<string, any>): { autoUnloadHistoryLogs?: boolean } | undefined {
+  if (!plugins || typeof plugins !== 'object') return
+  for (let key in plugins) {
+    if (key.startsWith('$')) continue
+    const config = plugins[key]
+    if (key.startsWith('~')) key = key.slice(1)
+    const name = key.split(':', 1)[0]
+    if (name === 'logger-plus') return config
+    if (key.startsWith('group:')) {
+      const result = findLoggerPlusConfig(config)
+      if (result) return result
+    }
+  }
+}
+
 function getRecordPaths(record: Logger.Record) {
   return (record.meta as { paths?: string[] } | undefined)?.paths ?? []
 }
 
 const plugins = computed(() => {
   const paths = new Set<string>()
-  for (const record of [...store.logs ?? [], ...dateLogs.value]) {
+  for (const record of [...historyLogs.value, ...(store.logs ?? []), ...dateLogs.value]) {
     for (const path of getRecordPaths(record)) {
       paths.add(path)
     }
@@ -143,8 +164,9 @@ const plugins = computed(() => {
 })
 
 const liveLogs = computed(() => {
-  if (!selectedPath.value) return store.logs ?? []
-  return (store.logs ?? []).filter(record => getRecordPaths(record).includes(selectedPath.value))
+  const logs = [...historyLogs.value, ...(store.logs ?? [])]
+  if (!selectedPath.value) return logs
+  return logs.filter(record => getRecordPaths(record).includes(selectedPath.value))
 })
 
 const selectedDateLabel = computed(() => selectedDate.value || '选择日期')
@@ -174,6 +196,34 @@ const filteredLogs = computed(() => selectedDate.value ? dateLogs.value : liveLo
 const hasActiveFilter = computed(() => !!selectedPath.value || !!selectedDate.value)
 
 const isFilterCollapsed = computed(() => !isFilterExpanded.value && !hasActiveFilter.value && !showDatePicker.value)
+
+const autoUnloadHistoryLogs = computed(() => findLoggerPlusConfig(store.config?.plugins)?.autoUnloadHistoryLogs !== false)
+
+function hasLoadedHistoryLogs() {
+  return historyLogs.value.length > 0 || !!historyCursor.value || dateLogs.value.length > 0 || !!dateCursor.value
+}
+
+function clearHistoryUnloadTimer() {
+  clearTimeout(historyUnloadTimer)
+  historyUnloadTimer = undefined
+}
+
+function unloadHistoryLogs() {
+  dateRequestId++
+  historyLogs.value = []
+  historyCursor.value = undefined
+  historyResetKey.value++
+  dateLogs.value = []
+  dateCursor.value = undefined
+  clearHistoryUnloadTimer()
+  if (selectedDate.value) selectedDate.value = ''
+}
+
+function resetHistoryUnloadTimer() {
+  clearHistoryUnloadTimer()
+  if (!autoUnloadHistoryLogs.value || !hasLoadedHistoryLogs()) return
+  historyUnloadTimer = setTimeout(unloadHistoryLogs, historyUnloadDelay)
+}
 
 function expandFilter() {
   if (isFilterCollapsed.value) isFilterExpanded.value = true
@@ -205,8 +255,15 @@ function clearDate() {
   showDatePicker.value = false
 }
 
-function prependDateLogs(logs: Logger.Record[]) {
-  dateLogs.value = [...logs, ...dateLogs.value]
+function prependLoadedLogs(logs: Logger.Record[], cursor?: string) {
+  if (selectedDate.value) {
+    dateLogs.value = [...logs, ...dateLogs.value]
+    dateCursor.value = cursor
+  } else {
+    historyLogs.value = [...logs, ...historyLogs.value]
+    historyCursor.value = cursor
+  }
+  resetHistoryUnloadTimer()
 }
 
 watch([selectedDate, selectedPath], async ([date, path]) => {
@@ -214,7 +271,11 @@ watch([selectedDate, selectedPath], async ([date, path]) => {
   const requestId = ++dateRequestId
   dateLogs.value = []
   dateCursor.value = undefined
-  if (!date) return
+  clearHistoryUnloadTimer()
+  if (!date) {
+    resetHistoryUnloadTimer()
+    return
+  }
   const page = await send('logger-plus/load-before', {
     date,
     path: path || undefined,
@@ -222,11 +283,23 @@ watch([selectedDate, selectedPath], async ([date, path]) => {
   if (requestId !== dateRequestId) return
   dateLogs.value = page.logs
   dateCursor.value = page.cursor
+  resetHistoryUnloadTimer()
+})
+
+watch(autoUnloadHistoryLogs, (enabled) => {
+  if (enabled) {
+    resetHistoryUnloadTimer()
+  } else {
+    clearHistoryUnloadTimer()
+  }
 })
 
 onMounted(() => document.addEventListener('pointerdown', handleDocumentPointerDown))
 
-onUnmounted(() => document.removeEventListener('pointerdown', handleDocumentPointerDown))
+onUnmounted(() => {
+  document.removeEventListener('pointerdown', handleDocumentPointerDown)
+  clearHistoryUnloadTimer()
+})
 
 </script>
 

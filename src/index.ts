@@ -104,6 +104,7 @@ export interface Config {
   maxAge?: number
   maxSize?: number
   showRecentLogsOnStartup?: boolean
+  autoUnloadHistoryLogs?: boolean
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -113,7 +114,8 @@ export const Config: Schema<Config> = Schema.object({
   }).default('data/logs').description('存放输出日志的本地目录'),
   maxAge: Schema.natural().default(30).description('日志文件保存的最大天数'),
   maxSize: Schema.natural().default(1024 * 100).description('单个日志文件的最大大小'),
-  showRecentLogsOnStartup: Schema.boolean().default(false).description('是否始终展示所有日志。日志加载过多可能影响性能，重启插件即可恢复'),
+  showRecentLogsOnStartup: Schema.boolean().default(false).description('是否无限加载过往日志。日志加载过多可能影响性能，重启插件即可恢复'),
+  autoUnloadHistoryLogs: Schema.boolean().default(true).description('半小时未查看日志后自动卸载已加载的过往日志'),
 })
 
 export async function apply(ctx: Context, config: Config) {

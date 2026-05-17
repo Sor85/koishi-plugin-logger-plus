@@ -13,6 +13,8 @@
       class="log-list k-text-selectable"
       :style="listStyle"
       @scroll="handleScroll"
+      @wheel.passive="markViewingLogs"
+      @pointerdown="markViewingLogs"
     >
       <div
         v-for="(record, index) in logs"
@@ -59,7 +61,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (name: 'prepend-logs', logs: Logger.Record[]): void
+  (name: 'prepend-logs', logs: Logger.Record[], cursor?: string): void
+  (name: 'view-logs'): void
 }>()
 
 interface LogPage {
@@ -128,7 +131,12 @@ function followLatest() {
   nextTick(() => requestAnimationFrame(scrollToBottom))
 }
 
+function markViewingLogs() {
+  emit('view-logs')
+}
+
 function toggleFollow() {
+  markViewingLogs()
   if (isFollowing.value) {
     setFollowing(false)
     return
@@ -153,6 +161,7 @@ async function loadBeforeLogs() {
   const anchorIndex = anchor ? Number(anchor.dataset.logIndex) : undefined
   const anchorOffset = anchor ? anchor.offsetTop - element.scrollTop : 0
   const firstLog = props.logs[0]
+  markViewingLogs()
   loadingBefore.value = true
   try {
     const page = await send('logger-plus/load-before', {
@@ -163,11 +172,7 @@ async function loadBeforeLogs() {
     loadCursor.value = page.cursor
     hasMoreBefore.value = page.hasMore
     if (!page.logs.length) return
-    if (props.loadDate) {
-      emit('prepend-logs', page.logs)
-    } else {
-      store.logs.unshift(...page.logs)
-    }
+    emit('prepend-logs', page.logs, page.cursor)
     await nextTick()
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => {
@@ -206,6 +211,7 @@ onMounted(() => {
 })
 
 onActivated(() => {
+  markViewingLogs()
   if (props.resetFollowOnEnter) followLatest()
 })
 
