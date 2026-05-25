@@ -59,10 +59,10 @@
       :logs="filteredLogs"
       show-link
       reset-follow-on-enter
-      :load-before="!selectedPath || !!selectedDate"
+      load-before
       :load-date="selectedDate"
       :load-path="selectedPath"
-      :load-cursor="selectedDate ? dateCursor : historyCursor"
+      :load-cursor="selectedDate ? dateCursor : undefined"
       :preserve-paused-position-on-return="preservePausedPositionOnReturn"
       @prepend-logs="prependLoadedLogs"
       @view-logs="resetHistoryUnloadTimer"
@@ -76,6 +76,7 @@ import { send, store } from '@koishijs/client'
 import Logger from 'reggol'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import Logs from './logs.vue'
+import { mergeLogRecords } from './log-record'
 
 interface LogPage {
   logs: Logger.Record[]
@@ -86,7 +87,6 @@ interface LogPage {
 const selectedPath = ref('')
 const selectedDate = ref('')
 const historyLogs = ref<Logger.Record[]>([])
-const historyCursor = ref<string | undefined>()
 const historyResetKey = ref(0)
 const dateLogs = ref<Logger.Record[]>([])
 const dateCursor = ref<string | undefined>()
@@ -168,7 +168,7 @@ const plugins = computed(() => {
 })
 
 const liveLogs = computed(() => {
-  const logs = [...historyLogs.value, ...(store.logs ?? [])]
+  const logs = mergeLogRecords(historyLogs.value, store.logs ?? [])
   if (!selectedPath.value) return logs
   return logs.filter(record => getRecordPaths(record).includes(selectedPath.value))
 })
@@ -205,7 +205,7 @@ const autoUnloadHistoryLogs = computed(() => findLoggerPlusConfig(store.config?.
 const preservePausedPositionOnReturn = computed(() => findLoggerPlusConfig(store.config?.plugins)?.preservePausedPositionOnReturn === true)
 
 function hasLoadedHistoryLogs() {
-  return historyLogs.value.length > 0 || !!historyCursor.value || dateLogs.value.length > 0 || !!dateCursor.value
+  return historyLogs.value.length > 0 || dateLogs.value.length > 0 || !!dateCursor.value
 }
 
 function clearHistoryUnloadTimer() {
@@ -216,7 +216,6 @@ function clearHistoryUnloadTimer() {
 function unloadHistoryLogs() {
   dateRequestId++
   historyLogs.value = []
-  historyCursor.value = undefined
   historyResetKey.value++
   dateLogs.value = []
   dateCursor.value = undefined
@@ -265,8 +264,7 @@ function prependLoadedLogs(logs: Logger.Record[], cursor?: string) {
     dateLogs.value = [...logs, ...dateLogs.value]
     dateCursor.value = cursor
   } else {
-    historyLogs.value = [...logs, ...historyLogs.value]
-    historyCursor.value = cursor
+    historyLogs.value = mergeLogRecords(historyLogs.value, logs)
   }
   resetHistoryUnloadTimer()
 }
@@ -277,17 +275,21 @@ watch([selectedDate, selectedPath], async ([date, path]) => {
   dateLogs.value = []
   dateCursor.value = undefined
   clearHistoryUnloadTimer()
-  if (!date) {
+  if (!date && !path) {
     resetHistoryUnloadTimer()
     return
   }
   const page = await send('logger-plus/load-before', {
-    date,
+    date: date || undefined,
     path: path || undefined,
   }) as LogPage
   if (requestId !== dateRequestId) return
-  dateLogs.value = page.logs
-  dateCursor.value = page.cursor
+  if (date) {
+    dateLogs.value = page.logs
+    dateCursor.value = page.cursor
+  } else {
+    historyLogs.value = mergeLogRecords(historyLogs.value, page.logs)
+  }
   resetHistoryUnloadTimer()
 })
 

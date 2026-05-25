@@ -18,9 +18,9 @@
     >
       <div
         v-for="(record, index) in logs"
-        :key="record.id"
+        :key="getLogKey(record)"
         :data-log-index="index"
-        :data-log-key="`${record.timestamp}:${record.id}`"
+        :data-log-key="getLogKey(record)"
         :class="{ line: true, start: isStart(index) }"
       >
         <code v-html="renderLine(record)"></code>
@@ -51,6 +51,7 @@ import ansi from 'ansi_up'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, ref, watch } from 'vue'
 import type { PausedLogPosition } from './log-position'
 import { capturePausedLogPosition, restorePausedLogPosition } from './log-position'
+import { getLogKey } from './log-record'
 
 const props = defineProps<{
   logs: Logger.Record[],
