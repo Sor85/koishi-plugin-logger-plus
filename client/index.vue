@@ -63,6 +63,7 @@
       :load-date="selectedDate"
       :load-path="selectedPath"
       :load-cursor="selectedDate ? dateCursor : historyCursor"
+      :preserve-paused-position-on-return="preservePausedPositionOnReturn"
       @prepend-logs="prependLoadedLogs"
       @view-logs="resetHistoryUnloadTimer"
     ></logs>
@@ -132,7 +133,10 @@ function findPluginEntry(path: string, plugins: Record<string, any>): { name: st
   }
 }
 
-function findLoggerPlusConfig(plugins: Record<string, any>): { autoUnloadHistoryLogs?: boolean } | undefined {
+function findLoggerPlusConfig(plugins: Record<string, any>): {
+  autoUnloadHistoryLogs?: boolean
+  preservePausedPositionOnReturn?: boolean
+} | undefined {
   if (!plugins || typeof plugins !== 'object') return
   for (let key in plugins) {
     if (key.startsWith('$')) continue
@@ -198,6 +202,7 @@ const hasActiveFilter = computed(() => !!selectedPath.value || !!selectedDate.va
 const isFilterCollapsed = computed(() => !isFilterExpanded.value && !hasActiveFilter.value && !showDatePicker.value)
 
 const autoUnloadHistoryLogs = computed(() => findLoggerPlusConfig(store.config?.plugins)?.autoUnloadHistoryLogs !== false)
+const preservePausedPositionOnReturn = computed(() => findLoggerPlusConfig(store.config?.plugins)?.preservePausedPositionOnReturn === true)
 
 function hasLoadedHistoryLogs() {
   return historyLogs.value.length > 0 || !!historyCursor.value || dateLogs.value.length > 0 || !!dateCursor.value

@@ -1,5 +1,6 @@
 lib
 dist
+/docs
 *.tsbuildinfo
 .DS_Store
 node_modules

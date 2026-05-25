@@ -20,6 +20,7 @@
         v-for="(record, index) in logs"
         :key="record.id"
         :data-log-index="index"
+        :data-log-key="`${record.timestamp}:${record.id}`"
         :class="{ line: true, start: isStart(index) }"
       >
         <code v-html="renderLine(record)"></code>
@@ -47,13 +48,16 @@ import { Time, message, send, store } from '@koishijs/client'
 import {} from '@koishijs/plugin-config'
 import Logger from 'reggol'
 import ansi from 'ansi_up'
-import { computed, nextTick, onActivated, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onMounted, ref, watch } from 'vue'
+import type { PausedLogPosition } from './log-position'
+import { capturePausedLogPosition, restorePausedLogPosition } from './log-position'
 
 const props = defineProps<{
   logs: Logger.Record[],
   showLink?: boolean,
   maxHeight?: string,
   resetFollowOnEnter?: boolean,
+  preservePausedPositionOnReturn?: boolean,
   loadBefore?: boolean,
   loadDate?: string,
   loadPath?: string,
@@ -94,6 +98,7 @@ watch(() => props.loadCursor, (cursor) => {
 })
 let lastScrollTop = 0
 let followStatusTimer: ReturnType<typeof setTimeout> | undefined
+let pausedPosition: PausedLogPosition | undefined
 
 const listStyle = computed(() => props.maxHeight ? { maxHeight: props.maxHeight } : {})
 
@@ -122,6 +127,7 @@ function updateFollowStatusVisibility() {
 function setFollowing(value: boolean) {
   if (isFollowing.value === value) return
   isFollowing.value = value
+  if (value) pausedPosition = undefined
   updateFollowStatusVisibility()
 }
 
@@ -139,9 +145,17 @@ function toggleFollow() {
   markViewingLogs()
   if (isFollowing.value) {
     setFollowing(false)
+    rememberPausedPosition()
     return
   }
   followLatest()
+}
+
+function rememberPausedPosition() {
+  const element = logList.value
+  if (!props.preservePausedPositionOnReturn || !element || isFollowing.value) return
+  const position = capturePausedLogPosition(element)
+  if (position) pausedPosition = position
 }
 
 function getVisibleAnchor(element: HTMLElement) {
@@ -204,6 +218,7 @@ function handleScroll() {
   } else if (isViewingLatest.value) {
     setFollowing(true)
   }
+  rememberPausedPosition()
 }
 
 onMounted(() => {
@@ -212,7 +227,22 @@ onMounted(() => {
 
 onActivated(() => {
   markViewingLogs()
+  if (props.preservePausedPositionOnReturn && !isFollowing.value) {
+    nextTick(() => requestAnimationFrame(() => {
+      if (logList.value) restorePausedLogPosition(logList.value, pausedPosition)
+      updateViewingLatest()
+    }))
+    return
+  }
   if (props.resetFollowOnEnter) followLatest()
+})
+
+onDeactivated(() => {
+  if (!props.preservePausedPositionOnReturn || isFollowing.value) {
+    pausedPosition = undefined
+    return
+  }
+  rememberPausedPosition()
 })
 
 watch(() => props.logs.length, async () => {

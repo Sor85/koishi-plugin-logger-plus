@@ -29,6 +29,7 @@
   "homepage": "https://github.com/Sor85/koishi-plugin-logger-plus#readme",
   "scripts": {
     "clean": "shx rm -rf lib dist *.tsbuildinfo client/*.tsbuildinfo",
+    "test": "node --import tsx --test \"tests/**/*.test.ts\"",
     "build": "npm run build:server && npm run build:client",
     "build:types": "tsc -p tsconfig.json",
     "build:server": "npm run build:types && tsup src/index.ts --format cjs --sourcemap --out-dir lib --clean false",
