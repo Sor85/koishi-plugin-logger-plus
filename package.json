@@ -3,6 +3,7 @@
   "description": "增强版 Koishi 控制台日志插件，支持过滤日志、自动暂停追踪。",
   "version": "0.0.9",
   "type": "commonjs",
+  "packageManager": "yarn@4.15.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "exports": {
@@ -30,12 +31,12 @@
   "scripts": {
     "clean": "shx rm -rf lib dist *.tsbuildinfo client/*.tsbuildinfo",
     "test": "node --import tsx --test \"tests/**/*.test.ts\"",
-    "build": "npm run build:server && npm run build:client",
+    "build": "yarn build:server && yarn build:client",
     "build:types": "tsc -p tsconfig.json",
-    "build:server": "npm run build:types && tsup src/index.ts --format cjs --sourcemap --out-dir lib --clean false",
+    "build:server": "yarn build:types && tsup src/index.ts --format cjs --sourcemap --out-dir lib --clean false",
     "build:client": "vite build --config vite.config.mts",
     "lint": "eslint src client --ext .ts,.vue",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "yarn clean && yarn build"
   },
   "keywords": [
     "bot",
@@ -70,7 +71,10 @@
   },
   "devDependencies": {
     "@koishijs/client": "^5.30.11",
+    "@koishijs/core": "^4.18.11",
+    "@koishijs/loader": "^4.6.0",
     "@koishijs/plugin-config": "^2.8.6",
+    "@koishijs/plugin-console": "^5.30.11",
     "@types/node": "^25.0.9",
     "@vitejs/plugin-vue": "^5.1.4",
     "ansi_up": "^5.2.1",

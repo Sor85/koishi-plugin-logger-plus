@@ -38,8 +38,8 @@ npm install koishi-plugin-logger-plus
 ## 开发
 
 ```bash
-npm install
-npm run build
+yarn install
+yarn build
 ```
 
 ## 许可证

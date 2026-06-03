@@ -4,6 +4,7 @@ dist
 *.tsbuildinfo
 .DS_Store
 node_modules
+.yarn/
 .claude/
 npm-debug.log*
 yarn-debug.log*
