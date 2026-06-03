@@ -372,6 +372,33 @@ function renderLine(record: Logger.Record) {
   color: var(--terminal-fg);
   background-color: var(--terminal-bg);
   padding: 1rem 1rem;
+  scrollbar-width: auto;
+  scrollbar-color: var(--terminal-separator) transparent;
+  scrollbar-color: color-mix(in srgb, var(--terminal-fg) 36%, var(--terminal-bg)) transparent;
+
+  &::-webkit-scrollbar {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  &::-webkit-scrollbar-track,
+  &::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--terminal-separator);
+    background: color-mix(in srgb, var(--terminal-fg) 36%, var(--terminal-bg));
+    border: 0.25rem solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background: var(--terminal-fg);
+    background: color-mix(in srgb, var(--terminal-fg) 55%, var(--terminal-bg));
+    background-clip: content-box;
+  }
 
   .line.start {
     margin-top: 1rem;
