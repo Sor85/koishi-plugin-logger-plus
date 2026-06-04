@@ -16,3 +16,9 @@ test('日志列表定义自定义滚动条样式', async () => {
   assert.match(source, /&::[-\w]+scrollbar\s*\{[\s\S]*width:\s*1rem;[\s\S]*height:\s*1rem;/)
   assert.match(source, /&::[-\w]+scrollbar-thumb/)
 })
+
+test('日志列表滚动容器使用 border-box 计算 padding', async () => {
+  const source = await readFile(new URL('../client/logs.vue', import.meta.url), 'utf8')
+
+  assert.match(source, /\.log-list\s*\{[\s\S]*box-sizing:\s*border-box;/)
+})

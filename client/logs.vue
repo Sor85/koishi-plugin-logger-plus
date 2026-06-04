@@ -367,6 +367,7 @@ function renderLine(record: Logger.Record) {
 }
 
 .log-list {
+  box-sizing: border-box;
   height: 100%;
   overflow-y: auto;
   color: var(--terminal-fg);
