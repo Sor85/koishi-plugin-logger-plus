@@ -3,6 +3,7 @@ import {} from 'koishi-plugin-logger-plus'
 import Logs from './index.vue'
 import Settings from './settings.vue'
 import './index.scss'
+import './overlay-scrollbar.scss'
 import './icons'
 
 import 'virtual:uno.css'

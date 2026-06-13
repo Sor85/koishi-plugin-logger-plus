@@ -9,6 +9,7 @@
       {{ isFollowing ? '追踪中' : '已暂停' }}
     </button>
     <div
+      v-overlay-scrollbar
       ref="logList"
       class="log-list k-text-selectable"
       :style="listStyle"
@@ -52,6 +53,7 @@ import { computed, nextTick, onActivated, onDeactivated, onMounted, ref, watch }
 import type { PausedLogPosition } from './log-position'
 import { capturePausedLogPosition, restorePausedLogPosition } from './log-position'
 import { getLogKey } from './log-record'
+import { vOverlayScrollbar } from './overlay-scrollbar'
 
 const props = defineProps<{
   logs: Logger.Record[],
@@ -373,33 +375,6 @@ function renderLine(record: Logger.Record) {
   color: var(--terminal-fg);
   background-color: var(--terminal-bg);
   padding: 1rem 1rem;
-  scrollbar-width: auto;
-  scrollbar-color: var(--terminal-separator) transparent;
-  scrollbar-color: color-mix(in srgb, var(--terminal-fg) 36%, var(--terminal-bg)) transparent;
-
-  &::-webkit-scrollbar {
-    width: 1rem;
-    height: 1rem;
-  }
-
-  &::-webkit-scrollbar-track,
-  &::-webkit-scrollbar-corner {
-    background: transparent;
-  }
-
-  &::-webkit-scrollbar-thumb {
-    background: var(--terminal-separator);
-    background: color-mix(in srgb, var(--terminal-fg) 36%, var(--terminal-bg));
-    border: 0.25rem solid transparent;
-    border-radius: 999px;
-    background-clip: content-box;
-  }
-
-  &::-webkit-scrollbar-thumb:hover {
-    background: var(--terminal-fg);
-    background: color-mix(in srgb, var(--terminal-fg) 55%, var(--terminal-bg));
-    background-clip: content-box;
-  }
 
   .line.start {
     margin-top: 1rem;

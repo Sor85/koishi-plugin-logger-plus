@@ -1,0 +1,58 @@
+[data-overlay-scrollbar="true"] {
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
+}
+
+[data-overlay-scrollbar="true"]::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+[data-overlay-scrollbar="true"]::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.overlay-scrollbar__overlay {
+  position: fixed;
+  z-index: var(--overlay-scrollbar-z-index, 10001);
+  width: 10px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease;
+}
+
+.overlay-scrollbar__overlay.is-visible {
+  opacity: 1;
+}
+
+.overlay-scrollbar__thumb {
+  position: absolute;
+  top: var(--overlay-scrollbar-thumb-top);
+  right: 2px;
+  width: 4px;
+  min-height: 28px;
+  height: var(--overlay-scrollbar-thumb-height);
+  border-radius: 999px;
+  background: #8b8b8b;
+  cursor: default;
+  pointer-events: auto;
+  transition: width 0.14s ease, right 0.14s ease, background 0.14s ease;
+}
+
+.overlay-scrollbar__overlay.is-wide .overlay-scrollbar__thumb,
+.overlay-scrollbar__thumb:hover {
+  right: 2px;
+  width: 6px;
+}
+
+.overlay-scrollbar__thumb.is-dragging {
+  cursor: default;
+}
+
+@media screen and (max-width: 768px) {
+  .overlay-scrollbar__overlay.is-hidden-on-narrow {
+    display: none;
+  }
+}
