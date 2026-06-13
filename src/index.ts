@@ -115,7 +115,7 @@ export const Config: Schema<Config> = Schema.object({
     allowCreate: true,
   }).default('data/logs').description('存放输出日志的本地目录'),
   maxAge: Schema.natural().default(30).description('日志文件保存的最大天数'),
-  maxSize: Schema.natural().default(1024 * 100).description('单个日志文件的最大大小'),
+  maxSize: Schema.natural().default(10240).description('单个日志文件的最大大小'),
   showRecentLogsOnStartup: Schema.boolean().default(false).description('是否无限加载过往日志。日志加载过多可能影响性能，重启插件即可恢复'),
   autoUnloadHistoryLogs: Schema.boolean().default(true).description('半小时未查看日志后自动卸载已加载的过往日志'),
   preservePausedPositionOnReturn: Schema.boolean().default(false).description('暂停时离开日志页，返回后保持上次暂停位置'),
