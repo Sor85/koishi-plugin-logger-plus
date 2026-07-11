@@ -66,6 +66,7 @@
       :preserve-paused-position-on-return="preservePausedPositionOnReturn"
       @prepend-logs="prependLoadedLogs"
       @view-logs="resetHistoryUnloadTimer"
+      @filter-path="selectedPath = $event"
     ></logs>
   </k-layout>
 </template>

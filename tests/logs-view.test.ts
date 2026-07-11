@@ -36,3 +36,12 @@ test('日志列表滚动容器使用 border-box 计算 padding', async () => {
 
   assert.match(source, /\.log-list\s*\{[\s\S]*box-sizing:\s*border-box;/)
 })
+
+test('点击日志名称时复用插件路径筛选', async () => {
+  const logsSource = await readSource('../client/logs.vue')
+  const indexSource = await readSource('../client/index.vue')
+
+  assert.match(logsSource, /class="log-name"/)
+  assert.match(logsSource, /emit\('filter-path', path\)/)
+  assert.match(indexSource, /@filter-path="selectedPath = \$event"/)
+})

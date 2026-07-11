@@ -24,7 +24,14 @@
         :data-log-key="getLogKey(record)"
         :class="{ line: true, start: isStart(index) }"
       >
-        <code v-html="renderLine(record)"></code>
+        <code><span v-html="renderPrefix(record)"></span><button
+          v-if="getPrimaryPath(record)"
+          class="log-name"
+          type="button"
+          :title="`筛选 ${record.name} 的日志`"
+          @click="filterByRecord(record)"
+          v-html="renderName(record)"
+        ></button><span v-else v-html="renderName(record)"></span><span v-html="renderContent(record)"></span></code>
         <span class="log-actions">
           <button class="log-action" type="button" title="复制整段日志" @click="copyLine(record)">
             <k-icon name="activity:copy"/>
@@ -70,6 +77,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (name: 'prepend-logs', logs: Logger.Record[], cursor?: string): void
   (name: 'view-logs'): void
+  (name: 'filter-path', path: string): void
 }>()
 
 interface LogPage {
@@ -274,6 +282,15 @@ function formatLine(record: Logger.Record, color = false) {
   return output
 }
 
+function getPrimaryPath(record: Logger.Record) {
+  return record.meta?.paths?.[0]
+}
+
+function filterByRecord(record: Logger.Record) {
+  const path = getPrimaryPath(record)
+  if (path) emit('filter-path', path)
+}
+
 async function writeClipboard(text: string) {
   if (window.isSecureContext && navigator.clipboard) {
     await navigator.clipboard.writeText(text)
@@ -303,8 +320,18 @@ async function copyLine(record: Logger.Record) {
   }
 }
 
-function renderLine(record: Logger.Record) {
-  return converter.ansi_to_html(formatLine(record, true))
+function renderPrefix(record: Logger.Record) {
+  const time = renderColor(8, Time.template(showTime, new Date(record.timestamp)))
+  return converter.ansi_to_html(`${time} [${record.type[0].toUpperCase()}] `)
+}
+
+function renderName(record: Logger.Record) {
+  return converter.ansi_to_html(renderColor(Logger.code(record.name, { colors: 3 }), record.name, ';1'))
+}
+
+function renderContent(record: Logger.Record) {
+  const indent = showTime.length + 5
+  return converter.ansi_to_html(` ${record.content.replace(/\n/g, '\n' + ' '.repeat(indent))}`)
 }
 
 </script>
@@ -429,6 +456,20 @@ function renderLine(record: Logger.Record) {
     align-items: center;
     opacity: 0;
     transition: opacity 0.15s ease;
+  }
+
+  .log-name {
+    color: inherit;
+    background: transparent;
+    border: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      text-decoration: underline;
+    }
   }
 
   .log-action {
