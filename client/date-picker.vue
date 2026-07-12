@@ -119,7 +119,7 @@ function select(date: string) {
   color: inherit;
   background: color-mix(in srgb, var(--terminal-bg) 70%, transparent);
   border: 1px solid transparent;
-  border-radius: 0.55rem;
+  border-radius: 999px;
   padding: 0 0.6rem;
   font: inherit;
   cursor: pointer;
