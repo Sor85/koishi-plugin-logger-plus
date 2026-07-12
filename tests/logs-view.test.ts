@@ -46,14 +46,19 @@ test('点击日志名称时复用插件路径筛选', async () => {
   assert.match(indexSource, /@filter-path="selectedPath = \$event"/)
 })
 
-test('插件筛选使用紧凑且跨浏览器的自定义胶囊', async () => {
-  const source = await readSource('../client/index.vue')
+test('筛选控件使用紧凑的 Vue 下拉菜单和日历', async () => {
+  const indexSource = await readSource('../client/index.vue')
+  const pluginSource = await readSource('../client/plugin-select.vue')
+  const dateSource = await readSource('../client/date-picker.vue')
 
-  assert.doesNotMatch(source, /<select/)
-  assert.match(source, /class="logger-plugin-popover"/)
-  assert.match(source, /\.logger-plugin-popover\s*\{[\s\S]*width:\s*12rem;[\s\S]*max-height:\s*14rem;/)
-  assert.match(source, /\.logger-filter\s*\{[\s\S]*width:\s*fit-content;/)
-  assert.doesNotMatch(source, /interpolate-size:/)
-  assert.match(source, /element\.animate\(\[\s*\{ width: `\$\{fromWidth\}px` \}/)
-  assert.match(source, /\.logger-plugin-trigger\s*\{[\s\S]*white-space:\s*nowrap;/)
+  assert.match(indexSource, /import PluginSelect from ['"]\.\/plugin-select\.vue['"]/)
+  assert.match(indexSource, /import DatePicker from ['"]\.\/date-picker\.vue['"]/)
+  assert.match(pluginSource, /role="combobox"/)
+  assert.match(pluginSource, /role="listbox"/)
+  assert.match(pluginSource, /max-height:\s*14rem;/)
+  assert.match(dateSource, /class="date-picker-content"/)
+  assert.match(dateSource, /grid-template-columns:\s*repeat\(7, 1fr\);/)
+  assert.match(indexSource, /\.logger-filter\s*\{[\s\S]*width:\s*fit-content;/)
+  assert.doesNotMatch(indexSource, /interpolate-size:/)
+  assert.match(indexSource, /element\.animate\(\[\s*\{ width: `\$\{fromWidth\}px` \}/)
 })

@@ -7,30 +7,22 @@
     >
       <span class="logger-filter-dot"></span>
       <label class="logger-filter-summary" for="logger-filter-path">过滤</label>
-      <button
+      <PluginSelect
         id="logger-filter-path"
-        class="logger-plugin-trigger"
-        type="button"
+        v-model="selectedPath"
+        :open="showPluginPicker"
+        :options="plugins"
         :tabindex="isFilterCollapsed ? -1 : undefined"
-        :aria-expanded="showPluginPicker"
-        @click="togglePluginPicker"
-      >
-        <span>{{ selectedPluginLabel }}</span>
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="m6 9 6 6 6-6"/>
-        </svg>
-      </button>
+        @update:open="setPluginPickerOpen"
+      />
       <label for="logger-filter-date">日期</label>
-      <button
+      <DatePicker
         id="logger-filter-date"
-        class="logger-date-trigger"
-        type="button"
+        v-model="selectedDate"
+        :open="showDatePicker"
         :tabindex="isFilterCollapsed ? -1 : undefined"
-        @click="toggleDatePicker"
-      >
-        <span>{{ selectedDateLabel }}</span>
-        <span class="logger-date-icon"></span>
-      </button>
+        @update:open="setDatePickerOpen"
+      />
       <button
         v-if="selectedDate"
         class="logger-filter-clear"
@@ -38,37 +30,6 @@
         :tabindex="isFilterCollapsed ? -1 : undefined"
         @click="clearDate"
       >清除</button>
-      <div v-if="showPluginPicker" class="logger-plugin-popover">
-        <button :class="{ selected: !selectedPath }" type="button" @click="selectPlugin('')">全部插件</button>
-        <button
-          v-for="plugin in plugins"
-          :key="plugin.path"
-          :class="{ selected: plugin.path === selectedPath }"
-          type="button"
-          @click="selectPlugin(plugin.path)"
-        >{{ plugin.label }}</button>
-      </div>
-      <div v-if="showDatePicker" class="logger-date-popover">
-        <div class="logger-date-header">
-          <button type="button" @click="shiftMonth(-1)">‹</button>
-          <strong>{{ calendarTitle }}</strong>
-          <button type="button" @click="shiftMonth(1)">›</button>
-        </div>
-        <div class="logger-date-weekdays">
-          <span v-for="weekday in weekdays" :key="weekday">{{ weekday }}</span>
-        </div>
-        <div class="logger-date-grid">
-          <button
-            v-for="day in calendarDays"
-            :key="day.key"
-            :class="{ muted: !day.currentMonth, today: day.date === todayDate, selected: day.date === selectedDate }"
-            type="button"
-            @click="selectDate(day.date)"
-          >
-            {{ day.day }}
-          </button>
-        </div>
-      </div>
     </div>
     <logs
       :key="`${selectedPath}:${selectedDate}:${historyResetKey}`"
@@ -93,8 +54,10 @@
 import { send, store } from '@koishijs/client'
 import Logger from 'reggol'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import DatePicker from './date-picker.vue'
 import Logs from './logs.vue'
 import { mergeLogRecords } from './log-record'
+import PluginSelect from './plugin-select.vue'
 
 interface LogPage {
   logs: Logger.Record[]
@@ -112,23 +75,9 @@ const showPluginPicker = ref(false)
 const showDatePicker = ref(false)
 const filterElement = ref<HTMLElement | null>(null)
 const isFilterExpanded = ref(false)
-const visibleMonth = ref(new Date())
-const weekdays = ['一', '二', '三', '四', '五', '六', '日']
-const todayDate = formatDate(new Date())
 const historyUnloadDelay = 30 * 60 * 1000
 let dateRequestId = 0
 let historyUnloadTimer: ReturnType<typeof setTimeout> | undefined
-
-function formatDate(date: Date) {
-  const year = date.getFullYear()
-  const month = `${date.getMonth() + 1}`.padStart(2, '0')
-  const day = `${date.getDate()}`.padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function createDate(year: number, month: number, day: number) {
-  return new Date(year, month, day)
-}
 
 function getPluginLabel(path: string) {
   const entry = findPluginEntry(path, store.config?.plugins)
@@ -190,30 +139,6 @@ const liveLogs = computed(() => {
   const logs = mergeLogRecords(historyLogs.value, store.logs ?? [])
   if (!selectedPath.value) return logs
   return logs.filter(record => getRecordPaths(record).includes(selectedPath.value))
-})
-
-const selectedDateLabel = computed(() => selectedDate.value || '选择日期')
-
-const selectedPluginLabel = computed(() => plugins.value.find(plugin => plugin.path === selectedPath.value)?.label || '全部插件')
-
-const calendarTitle = computed(() => `${visibleMonth.value.getFullYear()} 年 ${visibleMonth.value.getMonth() + 1} 月`)
-
-const calendarDays = computed(() => {
-  const year = visibleMonth.value.getFullYear()
-  const month = visibleMonth.value.getMonth()
-  const firstDay = createDate(year, month, 1)
-  const startOffset = (firstDay.getDay() + 6) % 7
-  const start = createDate(year, month, 1 - startOffset)
-  return Array.from({ length: 42 }, (_, index) => {
-    const date = createDate(start.getFullYear(), start.getMonth(), start.getDate() + index)
-    const value = formatDate(date)
-    return {
-      key: value,
-      date: value,
-      day: date.getDate(),
-      currentMonth: date.getMonth() === month,
-    }
-  })
 })
 
 const filteredLogs = computed(() => selectedDate.value ? dateLogs.value : liveLogs.value)
@@ -283,30 +208,14 @@ function handleDocumentPointerDown(event: PointerEvent) {
   }
 }
 
-function togglePluginPicker() {
-  showPluginPicker.value = !showPluginPicker.value
-  showDatePicker.value = false
+function setPluginPickerOpen(open: boolean) {
+  showPluginPicker.value = open
+  if (open) showDatePicker.value = false
 }
 
-function selectPlugin(path: string) {
-  selectedPath.value = path
-  showPluginPicker.value = false
-}
-
-function toggleDatePicker() {
-  showDatePicker.value = !showDatePicker.value
-  showPluginPicker.value = false
-}
-
-function shiftMonth(offset: number) {
-  visibleMonth.value = createDate(visibleMonth.value.getFullYear(), visibleMonth.value.getMonth() + offset, 1)
-}
-
-function selectDate(date: string) {
-  selectedDate.value = date
-  const [year, month] = date.split('-').map(Number)
-  visibleMonth.value = createDate(year, month - 1, 1)
-  showDatePicker.value = false
+function setDatePickerOpen(open: boolean) {
+  showDatePicker.value = open
+  if (open) showPluginPicker.value = false
 }
 
 function clearDate() {
@@ -454,217 +363,6 @@ onUnmounted(() => {
     white-space: nowrap;
   }
 
-  .logger-plugin-trigger,
-  .logger-date-trigger {
-    box-sizing: border-box;
-    height: 1.65rem;
-    min-width: 7.5rem;
-    color: inherit;
-    background: var(--terminal-bg);
-    background: color-mix(in srgb, var(--terminal-bg) 70%, transparent);
-    border: 1px solid transparent;
-    border-radius: 999px;
-    outline: none;
-    padding: 0 0.6rem;
-    cursor: pointer;
-    transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
-
-    &:hover,
-    &:focus-visible {
-      color: var(--terminal-fg-hover);
-      background: var(--terminal-bg-hover);
-      background: color-mix(in srgb, var(--terminal-bg-hover) 72%, var(--terminal-bg));
-      border-color: var(--terminal-separator);
-    }
-  }
-
-}
-
-.logger-plugin-trigger,
-.logger-date-trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.55rem;
-  font: inherit;
-}
-
-.logger-plugin-trigger {
-  max-width: 22rem;
-
-  span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-}
-
-.logger-date-trigger {
-  max-width: 12rem;
-}
-
-.logger-plugin-trigger svg {
-  width: 0.9rem;
-  height: 0.9rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.logger-plugin-popover {
-  position: absolute;
-  top: calc(100% + 0.35rem);
-  left: 4rem;
-  display: flex;
-  flex-direction: column;
-  width: 12rem;
-  max-height: 14rem;
-  overflow-y: auto;
-  color: var(--terminal-fg);
-  background: var(--terminal-bg-hover);
-  border: 1px solid var(--terminal-separator);
-  border-radius: 0.75rem;
-  padding: 0.3rem;
-  box-shadow: 0 12px 32px rgb(0 0 0 / 32%);
-
-  button {
-    flex: 0 0 auto;
-    overflow: hidden;
-    color: inherit;
-    background: transparent;
-    border: none;
-    border-radius: 0.45rem;
-    padding: 0.35rem 0.55rem;
-    font: inherit;
-    font-size: 0.8rem;
-    line-height: 1.15rem;
-    text-align: left;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    cursor: pointer;
-
-    &:hover,
-    &:focus-visible,
-    &.selected {
-      color: var(--terminal-fg-hover);
-      background: color-mix(in srgb, var(--terminal-bg) 72%, transparent);
-    }
-  }
-}
-
-.logger-date-icon {
-  position: relative;
-  width: 0.85rem;
-  height: 0.85rem;
-  border: 1px solid currentColor;
-  border-radius: 0.2rem;
-  opacity: 0.78;
-
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0.18rem;
-    left: -1px;
-    right: -1px;
-    border-top: 1px solid currentColor;
-  }
-}
-
-.logger-date-popover {
-  position: absolute;
-  top: calc(100% + 0.55rem);
-  left: 8.75rem;
-  width: 18rem;
-  color: var(--terminal-fg);
-  background: var(--terminal-bg-hover);
-  background: color-mix(in srgb, var(--terminal-bg-hover) 92%, transparent);
-  border: 1px solid var(--terminal-separator);
-  border-color: color-mix(in srgb, var(--terminal-separator) 78%, var(--terminal-fg));
-  border-radius: 1.1rem;
-  padding: 0.8rem;
-  box-shadow: 0 20px 60px rgb(0 0 0 / 34%), inset 0 1px 0 rgb(255 255 255 / 8%);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-}
-
-.logger-date-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.7rem;
-
-  strong {
-    font-size: 0.95rem;
-    letter-spacing: 0.04em;
-  }
-
-  button {
-    width: 2rem;
-    height: 2rem;
-    color: inherit;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 999px;
-    font-size: 1.5rem;
-    line-height: 1;
-    cursor: pointer;
-
-    &:hover,
-    &:focus-visible {
-      color: var(--terminal-fg-hover);
-      background: color-mix(in srgb, var(--terminal-bg) 72%, transparent);
-      border-color: var(--terminal-separator);
-    }
-  }
-}
-
-.logger-date-weekdays,
-.logger-date-grid {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 0.25rem;
-}
-
-.logger-date-weekdays {
-  margin-bottom: 0.35rem;
-  color: color-mix(in srgb, var(--terminal-fg) 62%, transparent);
-  font-size: 0.75rem;
-  text-align: center;
-}
-
-.logger-date-grid button {
-  aspect-ratio: 1;
-  color: inherit;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 0.65rem;
-  font: inherit;
-  cursor: pointer;
-  transition: transform 0.12s ease, border-color 0.12s ease, background-color 0.12s ease, color 0.12s ease;
-
-  &:hover,
-  &:focus-visible {
-    color: var(--terminal-fg-hover);
-    background: color-mix(in srgb, var(--terminal-bg) 76%, transparent);
-    border-color: var(--terminal-separator);
-  }
-
-  &.muted {
-    color: color-mix(in srgb, var(--terminal-fg) 40%, transparent);
-  }
-
-  &.today {
-    border-color: color-mix(in srgb, var(--terminal-fg-hover) 65%, transparent);
-  }
-
-  &.selected {
-    color: var(--terminal-bg);
-    background: var(--terminal-fg-hover);
-    border-color: var(--terminal-fg-hover);
-    box-shadow: 0 0 18px color-mix(in srgb, var(--terminal-fg-hover) 32%, transparent);
-  }
 }
 
 .logger-filter-dot {
