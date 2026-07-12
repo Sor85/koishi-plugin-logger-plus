@@ -354,7 +354,7 @@ function renderContent(record: Logger.Record) {
   color: var(--terminal-fg);
   color: color-mix(in srgb, var(--terminal-fg) 82%, transparent);
   background: var(--terminal-bg-hover);
-  background: color-mix(in srgb, var(--terminal-bg-hover) 86%, transparent);
+  background: color-mix(in srgb, var(--terminal-bg-hover) 58%, transparent);
   border: 1px solid var(--terminal-separator);
   border-color: color-mix(in srgb, var(--terminal-separator) 70%, var(--terminal-fg));
   border-radius: 999px;
@@ -363,8 +363,8 @@ function renderContent(record: Logger.Record) {
   cursor: pointer;
   opacity: 0;
   box-shadow: 0 10px 28px rgb(0 0 0 / 18%), inset 0 1px 0 rgb(255 255 255 / 8%);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
   transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
 
   &.visible,

@@ -286,7 +286,7 @@ onUnmounted(() => {
   gap: 0.5rem;
   color: var(--terminal-fg);
   background: var(--terminal-bg-hover);
-  background: color-mix(in srgb, var(--terminal-bg-hover) 86%, transparent);
+  background: color-mix(in srgb, var(--terminal-bg-hover) 58%, transparent);
   border: 1px solid var(--terminal-separator);
   border-color: color-mix(in srgb, var(--terminal-separator) 70%, var(--terminal-fg));
   border-radius: 999px;
@@ -299,8 +299,8 @@ onUnmounted(() => {
   padding: 0.35rem 0.35rem 0.35rem 0.65rem;
   line-height: 1.25rem;
   box-shadow: 0 10px 28px rgb(0 0 0 / 18%), inset 0 1px 0 rgb(255 255 255 / 8%);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
   transition: padding 0.18s ease-out, gap 0.18s ease-out, border-color 0.18s ease-out, box-shadow 0.18s ease-out;
 
   > :not(.logger-filter-dot):not(.logger-filter-summary) {
@@ -324,7 +324,7 @@ onUnmounted(() => {
     overflow: hidden;
     cursor: pointer;
     border-radius: 999px;
-    background: color-mix(in srgb, var(--terminal-bg-hover) 82%, transparent);
+    background: color-mix(in srgb, var(--terminal-bg-hover) 58%, transparent);
     box-shadow: 0 8px 20px rgb(0 0 0 / 28%), 0 0 0 1px color-mix(in srgb, var(--terminal-separator) 62%, transparent);
 
     > :not(.logger-filter-dot):not(.logger-filter-summary) {

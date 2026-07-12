@@ -62,3 +62,11 @@ test('筛选控件使用紧凑的 Vue 下拉菜单和日历', async () => {
   assert.doesNotMatch(indexSource, /interpolate-size:/)
   assert.match(indexSource, /element\.animate\(\[\s*\{ width: `\$\{fromWidth\}px` \}/)
 })
+
+test('筛选和追踪胶囊使用毛玻璃背景', async () => {
+  const indexSource = await readSource('../client/index.vue')
+  const logsSource = await readSource('../client/logs.vue')
+
+  assert.match(indexSource, /\.logger-filter\s*\{[\s\S]*backdrop-filter:\s*blur\(18px\) saturate\(140%\);/)
+  assert.match(logsSource, /\.logger-follow\s*\{[\s\S]*backdrop-filter:\s*blur\(18px\) saturate\(140%\);/)
+})
