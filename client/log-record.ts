@@ -13,3 +13,8 @@ export function mergeLogRecords(records: Logger.Record[], incoming: Logger.Recor
   }
   return [...entries.values()].sort((left, right) => left.timestamp - right.timestamp || left.id - right.id)
 }
+
+export function trimLogRecords(records: Logger.Record[], limit: number) {
+  if (records.length > limit) records.splice(0, records.length - limit)
+  return records
+}

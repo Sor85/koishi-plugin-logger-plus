@@ -20,6 +20,7 @@
       <div
         v-for="(record, index) in logs"
         :key="getLogKey(record)"
+        v-memo="[getLogKey(record), index]"
         :data-log-index="index"
         :data-log-key="getLogKey(record)"
         :class="{ line: true, start: isStart(index) }"

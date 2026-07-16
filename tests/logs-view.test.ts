@@ -15,6 +15,13 @@ test('日志行使用时间戳和 id 作为稳定渲染 key', async () => {
 
   assert.match(source, /:key="getLogKey\(record\)"/)
   assert.match(source, /:data-log-key="getLogKey\(record\)"/)
+  assert.match(source, /v-memo="\[getLogKey\(record\), index\]"/)
+})
+
+test('没有历史日志时不重复合并实时日志', async () => {
+  const source = await readSource('../client/index.vue')
+
+  assert.match(source, /historyLogs\.value\.length\s*\?\s*mergeLogRecords\(historyLogs\.value, store\.logs \?\? \[\]\)\s*:\s*store\.logs \?\? \[\]/)
 })
 
 test('日志列表使用 overlay 自绘滚动条', async () => {

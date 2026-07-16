@@ -136,7 +136,9 @@ const plugins = computed(() => {
 })
 
 const liveLogs = computed(() => {
-  const logs = mergeLogRecords(historyLogs.value, store.logs ?? [])
+  const logs = historyLogs.value.length
+    ? mergeLogRecords(historyLogs.value, store.logs ?? [])
+    : store.logs ?? []
   if (!selectedPath.value) return logs
   return logs.filter(record => getRecordPaths(record).includes(selectedPath.value))
 })

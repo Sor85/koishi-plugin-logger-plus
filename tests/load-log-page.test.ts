@@ -89,6 +89,12 @@ test('按插件筛选时即使未开启启动加载历史日志，也能读取�
     const page = await console.listener({ path: 'plugin.alpha' }) as { logs: Logger.Record[] }
 
     assert.deepEqual(page.logs.map(record => record.id), [1, 3])
+
+    const cursorPage = await console.listener({
+      cursor: `${records[2].timestamp}:${records[2].id}`,
+    }) as { logs: Logger.Record[] }
+
+    assert.deepEqual(cursorPage.logs.map(record => record.id), [1, 2])
   } finally {
     ctx.dispose()
     await rm(baseDir, { recursive: true, force: true })

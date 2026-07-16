@@ -2,54 +2,57 @@ import { FileHandle, open } from 'fs/promises'
 import { Logger } from 'koishi'
 import { Buffer } from 'buffer'
 
-export class FileWriter {
-  public data: Logger.Record[]
-  public task: Promise<FileHandle>
-  public size: number
+const MAX_BATCH_SIZE = 64 * 1024
 
-  private temp: Logger.Record[] = []
+export class FileWriter {
+  public task: Promise<FileHandle>
+  public size = 0
+
+  private temp: string[] = []
+  private tempSize = 0
+  private scheduled = false
 
   constructor(public date: string, public path: string) {
     this.task = open(path, 'a+').then(async (handle) => {
-      const buffer = await handle.readFile()
-      this.data = this.parse(new TextDecoder().decode(buffer))
-      this.size = buffer.byteLength
+      this.size += (await handle.stat()).size
       return handle
     })
-    this.task.then(() => this.flush())
   }
 
   flush() {
+    this.scheduled = false
     if (!this.temp.length) return
+    const content = Buffer.from(this.temp.join(''))
+    this.temp = []
+    this.tempSize = 0
     this.task = this.task.then(async (handle) => {
-      const content = Buffer.from(this.temp.map((record) => JSON.stringify(record) + '\n').join(''))
-      this.data.push(...this.temp)
-      this.temp = []
       await handle.write(content)
-      this.size += content.byteLength
       return handle
     })
   }
 
-  parse(text: string) {
-    return text.split('\n').map((line) => {
-      try {
-        return JSON.parse(line)
-      } catch {}
-    }).filter(Boolean)
-  }
-
-  async read() {
+  async sync() {
+    this.flush()
     await this.task
-    return this.data
   }
 
   write(record: Logger.Record) {
-    this.temp.push(record)
-    this.flush()
+    const content = JSON.stringify(record) + '\n'
+    const size = Buffer.byteLength(content)
+    this.temp.push(content)
+    this.tempSize += size
+    this.size += size
+    if (this.tempSize >= MAX_BATCH_SIZE) {
+      this.flush()
+      return
+    }
+    if (this.scheduled) return
+    this.scheduled = true
+    queueMicrotask(() => this.flush())
   }
 
   async close() {
+    await this.sync()
     const handle = await this.task
     await handle.close()
   }
