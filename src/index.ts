@@ -4,8 +4,10 @@ import { resolve } from 'path'
 import { mkdir, readdir, readFile, rm } from 'fs/promises'
 import { FileWriter } from './file'
 import { createLogRecordHandler } from './record'
+import { RecentLogBuffer } from './recent-log-buffer'
 
 const LOG_PAGE_SIZE = 200
+const RECENT_LOG_LIMIT = 1000
 
 interface LogPage {
   logs: Logger.Record[]
@@ -134,6 +136,7 @@ export async function apply(ctx: Context, config: Config) {
   }
 
   let writer: FileWriter
+  const recentLogs = new RecentLogBuffer<Logger.Record>(RECENT_LOG_LIMIT)
   async function createFile(date: string, index: number) {
     writer = new FileWriter(date, `${root}/${date}-${index}.log`)
 
@@ -153,7 +156,7 @@ export async function apply(ctx: Context, config: Config) {
   }
 
   async function readSavedLogs(date?: string) {
-    await writer?.task
+    await writer?.sync()
     const records: Logger.Record[] = []
     const entries = date ? [[date, files[date] ?? []] as [string, number[]]] : Object.entries(files)
     for (const [date, indexes] of entries) {
@@ -170,7 +173,7 @@ export async function apply(ctx: Context, config: Config) {
 
   async function loadLogPage(query?: string | LogQuery) {
     const { cursor, date, path } = normalizeLogQuery(query)
-    if (!date && !path && !config.showRecentLogsOnStartup) return { logs: [], hasMore: false }
+    if (!cursor && !date && !path && !config.showRecentLogsOnStartup) return { logs: [], hasMore: false }
     if (!isValidDate(date)) return { logs: [], hasMore: false }
     const records = (await readSavedLogs(date)).filter(record => !path || getRecordPaths(record).includes(path))
     return createLogPage(records, cursor)
@@ -178,7 +181,7 @@ export async function apply(ctx: Context, config: Config) {
 
   async function getLogs() {
     if (config.showRecentLogsOnStartup) return (await loadLogPage()).logs
-    return writer ? writer.read() : []
+    return recentLogs.values()
   }
 
   const date = new Date().toISOString().slice(0, 10)
@@ -206,6 +209,7 @@ export async function apply(ctx: Context, config: Config) {
       createFile(date, nextIndex)
     }
     writer.write(record)
+    recentLogs.push(record)
     buffer.push(record)
     update()
     if (writer.size >= config.maxSize) {
