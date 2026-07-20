@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-logger-plus",
   "description": "增强版 Koishi 控制台日志插件，支持过滤日志、自动暂停追踪。",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "type": "commonjs",
   "packageManager": "yarn@4.15.0",
   "main": "lib/index.js",
