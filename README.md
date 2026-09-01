@@ -33,7 +33,7 @@ npm install koishi-plugin-logger-plus
 | --- | --- | --- |
 | `root` | `data/logs` | 日志文件目录 |
 | `maxAge` | `30` | 日志保留天数 |
-| `maxSize` | `10240` | 单个日志文件最大大小 |
+| `maxSize` | `1048576` | 单个日志文件最大大小（字节） |
 
 ## 开发
 

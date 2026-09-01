@@ -1,10 +1,11 @@
-import { Context, Dict, Logger, remove, Schema, Time } from 'koishi'
+import { Context, Logger, remove, Schema } from 'koishi'
 import { DataService } from '@koishijs/plugin-console'
 import { resolve } from 'path'
 import { mkdir, readdir, readFile, rm } from 'fs/promises'
 import { FileWriter } from './file'
 import { createLogRecordHandler } from './record'
 import { RecentLogBuffer } from './recent-log-buffer'
+import { isMissingFileError, LogFileIndex } from './log-file-index'
 
 const LOG_PAGE_SIZE = 200
 const RECENT_LOG_LIMIT = 1000
@@ -117,7 +118,7 @@ export const Config: Schema<Config> = Schema.object({
     allowCreate: true,
   }).default('data/logs').description('存放输出日志的本地目录'),
   maxAge: Schema.natural().default(30).description('日志文件保存的最大天数'),
-  maxSize: Schema.natural().default(10240).description('单个日志文件的最大大小'),
+  maxSize: Schema.natural().default(1048576).description('单个日志文件的最大大小（字节）。写满即换新文件，值太小会让日志目录里堆出海量小文件'),
   showRecentLogsOnStartup: Schema.boolean().default(false).description('是否无限加载过往日志。日志加载过多可能影响性能，重启插件即可恢复'),
   autoUnloadHistoryLogs: Schema.boolean().default(true).description('半小时未查看日志后自动卸载已加载的过往日志'),
   preservePausedPositionOnReturn: Schema.boolean().default(false).description('暂停时离开日志页，返回后保持上次暂停位置'),
@@ -127,42 +128,48 @@ export async function apply(ctx: Context, config: Config) {
   const root = resolve(ctx.baseDir, config.root)
   await mkdir(root, { recursive: true })
 
-  const files: Dict<number[]> = {}
-  for (const filename of await readdir(root)) {
-    const capture = /^(\d{4}-\d{2}-\d{2})-(\d+)\.log$/.exec(filename)
-    if (!capture) continue
-    files[capture[1]] ??= []
-    files[capture[1]].push(+capture[2])
-  }
+  const fileIndex = new LogFileIndex(await readdir(root))
 
   let writer: FileWriter
   const recentLogs = new RecentLogBuffer<Logger.Record>(RECENT_LOG_LIMIT)
-  async function createFile(date: string, index: number) {
+
+  /** 文件不在了就别记日志：记一条就写一行，写满就滚动，滚动又清理，清理再报错。 */
+  function reportFileError(error: unknown) {
+    if (isMissingFileError(error)) return
+    ctx.logger('logger-plus').warn(error)
+  }
+
+  function openFile(date: string, index: number) {
     writer = new FileWriter(date, `${root}/${date}-${index}.log`)
+  }
 
-    const { maxAge } = config
-    if (!maxAge) return
+  function rollFile(date: string) {
+    writer.close()
+    openFile(date, fileIndex.allocate(date))
+  }
 
-    const now = Date.now()
-    for (const date of Object.keys(files)) {
-      if (now - +new Date(date) < maxAge * Time.day) continue
-      for (const index of files[date]) {
-        await rm(`${root}/${date}-${index}.log`).catch((error) => {
-          ctx.logger('logger-plus').warn(error)
-        })
+  /**
+   * 清理过期日志。只在启动与跨日时各跑一次。
+   *
+   * 挂在按大小滚动那一步是原来的写法，代价是每写满一个文件就把所有旧日期遍历一遍并逐个 `rm`；
+   * 而新的日期过期只会随着日子往前走发生，跟文件写满没有关系。清单本身保证同一批文件不会被
+   * 清理两遍（见 `takeExpired`）。
+   */
+  async function pruneExpiredLogs(now: number) {
+    for (const { date, indexes } of fileIndex.takeExpired(config.maxAge, now)) {
+      for (const index of indexes) {
+        await rm(`${root}/${date}-${index}.log`).catch(reportFileError)
       }
-      delete files[date]
     }
   }
 
   async function readSavedLogs(date?: string) {
     await writer?.sync()
     const records: Logger.Record[] = []
-    const entries = date ? [[date, files[date] ?? []] as [string, number[]]] : Object.entries(files)
-    for (const [date, indexes] of entries) {
-      for (const index of indexes) {
-        const text = await readFile(`${root}/${date}-${index}.log`, 'utf8').catch((error) => {
-          ctx.logger('logger-plus').warn(error)
+    for (const group of fileIndex.entries(date)) {
+      for (const index of group.indexes) {
+        const text = await readFile(`${root}/${group.date}-${index}.log`, 'utf8').catch((error) => {
+          reportFileError(error)
           return ''
         })
         records.push(...parseRecords(text))
@@ -184,11 +191,9 @@ export async function apply(ctx: Context, config: Config) {
     return recentLogs.values()
   }
 
-  const date = new Date().toISOString().slice(0, 10)
-  const index = Math.max(...files[date] ?? [0]) + 1
-  files[date] ??= []
-  files[date].push(index)
-  createFile(date, index)
+  const today = new Date().toISOString().slice(0, 10)
+  openFile(today, fileIndex.allocate(today))
+  void pruneExpiredLogs(Date.now())
 
   let buffer: Logger.Record[] = []
   const update = ctx.throttle(() => {
@@ -202,23 +207,15 @@ export async function apply(ctx: Context, config: Config) {
   const handleRecord = createLogRecordHandler(loader, (record) => {
     const date = new Date(record.timestamp).toISOString().slice(0, 10)
     if (writer.date !== date) {
-      writer.close()
-      const nextIndex = Math.max(...files[date] ?? [0]) + 1
-      files[date] ??= []
-      files[date].push(nextIndex)
-      createFile(date, nextIndex)
+      rollFile(date)
+      // 跨日是新日期开始过期的唯一时机，因此清理挂在这里，用这条记录的时间当作「现在」。
+      void pruneExpiredLogs(record.timestamp)
     }
     writer.write(record)
     recentLogs.push(record)
     buffer.push(record)
     update()
-    if (writer.size >= config.maxSize) {
-      writer.close()
-      const nextIndex = Math.max(...files[date] ?? [0]) + 1
-      files[date] ??= []
-      files[date].push(nextIndex)
-      createFile(date, nextIndex)
-    }
+    if (writer.size >= config.maxSize) rollFile(date)
   })
   const target: Logger.Target = {
     colors: 3,
