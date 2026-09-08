@@ -1,12 +1,13 @@
 import { Context, Logger, remove, Schema } from 'koishi'
 import { DataService } from '@koishijs/plugin-console'
 import { resolve } from 'path'
-import { mkdir, readdir, readFile, rm } from 'fs/promises'
+import { mkdir, readdir, rm } from 'fs/promises'
 import { FileWriter } from './file'
 import { createLogRecordHandler } from './record'
 import { RecentLogBuffer } from './recent-log-buffer'
 import { isMissingFileError, LogFileIndex } from './log-file-index'
 import { hasLogFilter, isLogType, LogFilter, matchesLogFilter } from './log-filter'
+import { readRecordsBackward } from './log-reader'
 
 const LOG_PAGE_SIZE = 200
 const RECENT_LOG_LIMIT = 1000
@@ -20,14 +21,6 @@ interface LogPage {
 interface LogQuery extends LogFilter {
   cursor?: string
   date?: string
-}
-
-function parseRecords(text: string): Logger.Record[] {
-  return text.split('\n').map((line) => {
-    try {
-      return JSON.parse(line) as Logger.Record
-    } catch {}
-  }).filter((record): record is Logger.Record => !!record)
 }
 
 function compareRecords(left: Logger.Record, right: Logger.Record) {
@@ -64,16 +57,6 @@ function normalizeLogFilter(query: LogQuery): LogFilter {
 
 function sortLogs(records: Logger.Record[]) {
   return records.sort(compareRecords)
-}
-
-function createLogPage(records: Logger.Record[], cursor?: string): LogPage {
-  const candidates = records.filter(record => isBeforeCursor(record, cursor))
-  const logs = candidates.slice(-LOG_PAGE_SIZE)
-  return {
-    logs,
-    cursor: logs[0] ? createLogCursor(logs[0]) : cursor,
-    hasMore: candidates.length > logs.length,
-  }
 }
 
 declare module '@koishijs/console' {
@@ -168,23 +151,25 @@ export async function apply(ctx: Context, config: Config) {
     }
   }
 
-  async function readSavedLogs(date?: string) {
+  /**
+   * 逐条交出已经落盘的日志，顺序从新到旧。
+   *
+   * 不把文件读成数组再拼起来：单个文件的记录数会随 `maxSize` 上到十万级，一次查询又会跨上百个
+   * 文件，整份读进内存既有 `push(...records)` 撞实参上限的 `RangeError`，也让内存占用跟历史总量
+   * 成正比。改成生成器之后，调用方凑够一页就能停下，更早的文件根本不会被打开。
+   */
+  async function* readSavedRecords(date?: string) {
     await writer?.sync()
-    const records: Logger.Record[] = []
-    for (const group of fileIndex.entries(date)) {
+    for (const group of fileIndex.reverseEntries(date)) {
       for (const index of group.indexes) {
-        const text = await readFile(`${root}/${group.date}-${index}.log`, 'utf8').catch((error) => {
+        try {
+          yield* readRecordsBackward(`${root}/${group.date}-${index}.log`)
+        } catch (error) {
+          // 单个文件读不了不该让整页日志失败：清理刚好删掉它，或者它压根不是文件
           reportFileError(error)
-          return ''
-        })
-        // 单个文件的记录数会随 maxSize 上到十万级，push(...records) 一超过实参上限就是
-        // RangeError，而且崩在「查历史日志」这条路上，只能逐条追加。
-        for (const record of parseRecords(text)) {
-          records.push(record)
         }
       }
     }
-    return sortLogs(records)
   }
 
   async function loadLogPage(query?: string | LogQuery) {
@@ -193,8 +178,22 @@ export async function apply(ctx: Context, config: Config) {
     const filter = normalizeLogFilter(normalized)
     if (!cursor && !date && !hasLogFilter(filter) && !config.showRecentLogsOnStartup) return { logs: [], hasMore: false }
     if (!isValidDate(date)) return { logs: [], hasMore: false }
-    const records = (await readSavedLogs(date)).filter(record => matchesLogFilter(record, filter))
-    return createLogPage(records, cursor)
+    const collected: Logger.Record[] = []
+    let hasMore = false
+    for await (const record of readSavedRecords(date)) {
+      if (!isBeforeCursor(record, cursor)) continue
+      if (!matchesLogFilter(record, filter)) continue
+      if (collected.length >= LOG_PAGE_SIZE) {
+        // 只需要知道「还有更早的」，多读到一条就够，剩下的文件不必再打开
+        hasMore = true
+        break
+      }
+      collected.push(record)
+    }
+    // 收集顺序是从新到旧，先翻回落盘顺序，再按时间排一遍：进程重启会让 id 从头计数，只靠 id
+    // 排不出跨重启的先后
+    const logs = sortLogs(collected.reverse())
+    return { logs, cursor: logs[0] ? createLogCursor(logs[0]) : cursor, hasMore } satisfies LogPage
   }
 
   async function getLogs() {

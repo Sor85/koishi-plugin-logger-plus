@@ -32,10 +32,20 @@ test('序号不连续时按最大值继续分配', () => {
 test('清单副本被外部修改不影响后续分配与读取', () => {
   const index = new LogFileIndex(['2026-09-01-1.log'])
 
-  index.entries('2026-09-01')[0].indexes.push(99)
+  index.reverseEntries('2026-09-01')[0].indexes.push(99)
 
-  assert.deepEqual(index.entries('2026-09-01'), [{ date: '2026-09-01', indexes: [1] }])
+  assert.deepEqual(index.reverseEntries('2026-09-01'), [{ date: '2026-09-01', indexes: [1] }])
   assert.equal(index.allocate('2026-09-01'), 2)
+})
+
+test('读取清单按日期和序号从新到旧排列', () => {
+  // 读日志页是倒着遍历文件的，顺序错了就会先读到更早的文件，一页里混进不该出现的记录
+  const index = new LogFileIndex(['2026-08-31-2.log', '2026-09-01-10.log', '2026-08-31-1.log', '2026-09-01-9.log'])
+
+  assert.deepEqual(index.reverseEntries(), [
+    { date: '2026-09-01', indexes: [10, 9] },
+    { date: '2026-08-31', indexes: [2, 1] },
+  ])
 })
 
 test('过期日期交出之后清单里不再有它', () => {
@@ -45,7 +55,7 @@ test('过期日期交出之后清单里不再有它', () => {
   assert.deepEqual(index.takeExpired(30, now), [{ date: '2026-07-01', indexes: [1, 2] }])
   // 并发的第二次清理拿到空清单，因此同一批文件不会被删第二遍，也就不会刷出一堆「文件不存在」。
   assert.deepEqual(index.takeExpired(30, now), [])
-  assert.deepEqual(index.entries(), [{ date: '2026-08-31', indexes: [1] }])
+  assert.deepEqual(index.reverseEntries(), [{ date: '2026-08-31', indexes: [1] }])
 })
 
 test('刚好到保留天数的日期不算过期', () => {

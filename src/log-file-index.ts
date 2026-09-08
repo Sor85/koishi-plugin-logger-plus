@@ -56,10 +56,20 @@ export class LogFileIndex {
     return index
   }
 
-  /** 读取用的清单副本；不给出内部数组，避免调用方边读边改。 */
-  entries(date?: string): LogFileGroup[] {
-    if (date) return [{ date, indexes: [...this.indexes[date] ?? []] }]
-    return Object.keys(this.indexes).map(date => ({ date, indexes: [...this.indexes[date]] }))
+  /**
+   * 读取用的清单副本，日期与序号都从新到旧排列；不给出内部数组，避免调用方边读边改。
+   *
+   * 顺序必须在这里定好：读日志页只要最新的若干条，倒着遍历才能在凑够一页之后停下，不必再打开更
+   * 早的文件。而 `indexes` 的登记顺序来自 `readdir`，本身不保证有序，靠它「碰巧有序」就会在某些
+   * 文件系统上把更早的文件排到前面，一页日志里混进不该出现的记录。
+   */
+  reverseEntries(date?: string): LogFileGroup[] {
+    // 日期形如 yyyy-MM-dd，字典序与时间序一致
+    const dates = date ? [date] : Object.keys(this.indexes).sort().reverse()
+    return dates.map(current => ({
+      date: current,
+      indexes: [...this.indexes[current] ?? []].sort((left, right) => right - left),
+    }))
   }
 
   /**
