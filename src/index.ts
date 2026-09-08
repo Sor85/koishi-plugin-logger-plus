@@ -6,6 +6,7 @@ import { FileWriter } from './file'
 import { createLogRecordHandler } from './record'
 import { RecentLogBuffer } from './recent-log-buffer'
 import { isMissingFileError, LogFileIndex } from './log-file-index'
+import { hasLogFilter, isLogType, LogFilter, matchesLogFilter } from './log-filter'
 
 const LOG_PAGE_SIZE = 200
 const RECENT_LOG_LIMIT = 1000
@@ -16,10 +17,9 @@ interface LogPage {
   hasMore: boolean
 }
 
-interface LogQuery {
+interface LogQuery extends LogFilter {
   cursor?: string
   date?: string
-  path?: string
 }
 
 function parseRecords(text: string): Logger.Record[] {
@@ -53,8 +53,13 @@ function isValidDate(date?: string) {
   return !date || /^\d{4}-\d{2}-\d{2}$/.test(date)
 }
 
-function getRecordPaths(record: Logger.Record) {
-  return (record.meta as { paths?: string[] } | undefined)?.paths ?? []
+function normalizeLogFilter(query: LogQuery): LogFilter {
+  return {
+    path: query.path || undefined,
+    // 等级只接受已知取值，避免前端传来的任意字符串把历史日志全部过滤成空
+    type: isLogType(query.type) ? query.type : undefined,
+    search: query.search?.trim() || undefined,
+  }
 }
 
 function sortLogs(records: Logger.Record[]) {
@@ -179,10 +184,12 @@ export async function apply(ctx: Context, config: Config) {
   }
 
   async function loadLogPage(query?: string | LogQuery) {
-    const { cursor, date, path } = normalizeLogQuery(query)
-    if (!cursor && !date && !path && !config.showRecentLogsOnStartup) return { logs: [], hasMore: false }
+    const normalized = normalizeLogQuery(query)
+    const { cursor, date } = normalized
+    const filter = normalizeLogFilter(normalized)
+    if (!cursor && !date && !hasLogFilter(filter) && !config.showRecentLogsOnStartup) return { logs: [], hasMore: false }
     if (!isValidDate(date)) return { logs: [], hasMore: false }
-    const records = (await readSavedLogs(date)).filter(record => !path || getRecordPaths(record).includes(path))
+    const records = (await readSavedLogs(date)).filter(record => matchesLogFilter(record, filter))
     return createLogPage(records, cursor)
   }
 

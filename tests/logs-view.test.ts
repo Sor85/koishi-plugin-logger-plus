@@ -55,15 +55,15 @@ test('点击日志名称时复用插件路径筛选', async () => {
 
 test('筛选控件使用紧凑的 Vue 下拉菜单和日历', async () => {
   const indexSource = await readSource('../client/index.vue')
-  const pluginSource = await readSource('../client/plugin-select.vue')
+  const optionSource = await readSource('../client/option-select.vue')
   const dateSource = await readSource('../client/date-picker.vue')
 
-  assert.match(indexSource, /import PluginSelect from ['"]\.\/plugin-select\.vue['"]/)
+  assert.match(indexSource, /import OptionSelect from ['"]\.\/option-select\.vue['"]/)
   assert.match(indexSource, /import DatePicker from ['"]\.\/date-picker\.vue['"]/)
-  assert.match(pluginSource, /role="combobox"/)
-  assert.match(pluginSource, /role="listbox"/)
-  assert.match(pluginSource, /max-height:\s*14rem;/)
-  assert.match(pluginSource, /\.plugin-select-trigger\s*\{[\s\S]*border-radius:\s*999px;/)
+  assert.match(optionSource, /role="combobox"/)
+  assert.match(optionSource, /role="listbox"/)
+  assert.match(optionSource, /max-height:\s*14rem;/)
+  assert.match(optionSource, /\.option-select-trigger\s*\{[\s\S]*border-radius:\s*999px;/)
   assert.match(dateSource, /class="date-picker-content"/)
   assert.match(dateSource, /grid-template-columns:\s*repeat\(7, 1fr\);/)
   assert.match(dateSource, /\.date-picker-trigger\s*\{[\s\S]*border-radius:\s*999px;/)
@@ -78,4 +78,56 @@ test('筛选和追踪胶囊使用毛玻璃背景', async () => {
 
   assert.match(indexSource, /\.logger-filter\s*\{[\s\S]*backdrop-filter:\s*blur\(18px\) saturate\(140%\);/)
   assert.match(logsSource, /\.logger-follow\s*\{[\s\S]*backdrop-filter:\s*blur\(18px\) saturate\(140%\);/)
+})
+
+test('报错日志整行标红并给等级标记着色', async () => {
+  const source = await readSource('../client/logs.vue')
+
+  assert.match(source, /:class="\['line', `level-\$\{record\.type\}`, \{ start: isStart\(index\) \}\]"/)
+  assert.match(source, /\.line\.level-error\s*\{[\s\S]*background-color:\s*color-mix\(in srgb, #f85149 16%, transparent\);/)
+  assert.match(source, /\.line\.level-error\s*\{[\s\S]*&:hover\s*\{[\s\S]*background-color:\s*color-mix\(in srgb, #f85149 26%, transparent\);/)
+  assert.match(source, /const levelColors: Record<string, number> = \{[\s\S]*error: 9,/)
+  assert.match(source, /const level = code === undefined \? marker : renderColor\(code, marker, ';1'\)/)
+})
+
+test('离开底部时提供回到底部按钮', async () => {
+  const source = await readSource('../client/logs.vue')
+
+  assert.match(source, /:class="\['logger-scroll-bottom', \{ visible: !isViewingLatest \}\]"/)
+  assert.match(source, /@click="returnToLatest"/)
+  assert.match(source, /function returnToLatest\(\) \{\s*markViewingLogs\(\)\s*followLatest\(\)\s*\}/)
+  assert.match(source, /\.logger-scroll-bottom\s*\{[\s\S]*pointer-events:\s*none;/)
+  assert.match(source, /\.logger-scroll-bottom\s*\{[\s\S]*&\.visible\s*\{[\s\S]*pointer-events:\s*auto;/)
+})
+
+test('过滤胶囊提供关键词搜索并合并连续输入', async () => {
+  const source = await readSource('../client/index.vue')
+
+  assert.match(source, /class="logger-filter-search"/)
+  assert.match(source, /v-model="searchInput"/)
+  assert.match(source, /@keydown\.enter\.prevent="applySearchKeyword"/)
+  assert.match(source, /searchDebounceTimer = setTimeout\(applySearchKeyword, searchDebounceDelay\)/)
+  assert.match(source, /searchKeyword\.value = searchInput\.value\.trim\(\)/)
+  assert.match(source, /clearTimeout\(searchDebounceTimer\)/)
+})
+
+test('过滤胶囊提供日志等级筛选', async () => {
+  const source = await readSource('../client/index.vue')
+
+  assert.match(source, /id="logger-filter-level"/)
+  assert.match(source, /v-model="selectedType"/)
+  assert.match(source, /empty-label="全部等级"/)
+  assert.match(source, /const levelLabels: Record<LogType, string> = \{[\s\S]*debug: '调试',/)
+  assert.match(source, /const levelOptions = logTypes\.map\(type => \(\{ value: type, label: levelLabels\[type\] \}\)\)/)
+})
+
+test('等级和关键词条件同时作用于实时日志与历史日志分页', async () => {
+  const indexSource = await readSource('../client/index.vue')
+  const logsSource = await readSource('../client/logs.vue')
+
+  assert.match(indexSource, /matchesLogFilter\(record, recordFilter\.value\)/)
+  assert.match(indexSource, /:load-type="selectedType"/)
+  assert.match(indexSource, /:load-search="searchKeyword"/)
+  assert.match(indexSource, /watch\(\[selectedDate, selectedPath, selectedType, searchKeyword\]/)
+  assert.match(logsSource, /type: props\.loadType \|\| undefined,\s*search: props\.loadSearch \|\| undefined,/)
 })

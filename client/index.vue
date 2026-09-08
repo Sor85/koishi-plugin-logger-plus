@@ -7,32 +7,57 @@
     >
       <span class="logger-filter-dot"></span>
       <label class="logger-filter-summary" for="logger-filter-path">过滤</label>
-      <PluginSelect
+      <OptionSelect
         id="logger-filter-path"
         v-model="selectedPath"
-        :open="showPluginPicker"
-        :options="plugins"
+        :open="openPicker === 'plugin'"
+        :options="pluginOptions"
+        empty-label="全部插件"
         :tabindex="isFilterCollapsed ? -1 : undefined"
-        @update:open="setPluginPickerOpen"
+        @update:open="setPickerOpen('plugin', $event)"
+      />
+      <label for="logger-filter-level">等级</label>
+      <OptionSelect
+        id="logger-filter-level"
+        v-model="selectedType"
+        :open="openPicker === 'level'"
+        :options="levelOptions"
+        empty-label="全部等级"
+        min-width="5.5rem"
+        :tabindex="isFilterCollapsed ? -1 : undefined"
+        @update:open="setPickerOpen('level', $event)"
       />
       <label for="logger-filter-date">日期</label>
       <DatePicker
         id="logger-filter-date"
         v-model="selectedDate"
-        :open="showDatePicker"
+        :open="openPicker === 'date'"
         :tabindex="isFilterCollapsed ? -1 : undefined"
-        @update:open="setDatePickerOpen"
+        @update:open="setPickerOpen('date', $event)"
       />
+      <label for="logger-filter-search">搜索</label>
+      <input
+        id="logger-filter-search"
+        v-model="searchInput"
+        class="logger-filter-search"
+        type="text"
+        placeholder="关键词"
+        autocomplete="off"
+        spellcheck="false"
+        :tabindex="isFilterCollapsed ? -1 : undefined"
+        @keydown.enter.prevent="applySearchKeyword"
+      >
       <button
-        v-if="selectedDate"
+        v-if="hasActiveFilter"
         class="logger-filter-clear"
         type="button"
+        title="清除全部筛选条件"
         :tabindex="isFilterCollapsed ? -1 : undefined"
-        @click="clearDate"
+        @click="clearFilters"
       >清除</button>
     </div>
     <logs
-      :key="`${selectedPath}:${selectedDate}:${historyResetKey}`"
+      :key="`${selectedPath}:${selectedType}:${searchKeyword}:${selectedDate}:${historyResetKey}`"
       class="layout-logger"
       :logs="filteredLogs"
       show-link
@@ -40,6 +65,8 @@
       load-before
       :load-date="selectedDate"
       :load-path="selectedPath"
+      :load-type="selectedType"
+      :load-search="searchKeyword"
       :load-cursor="selectedDate ? dateCursor : undefined"
       :preserve-paused-position-on-return="preservePausedPositionOnReturn"
       @prepend-logs="prependLoadedLogs"
@@ -57,7 +84,9 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import DatePicker from './date-picker.vue'
 import Logs from './logs.vue'
 import { mergeLogRecords } from './log-record'
-import PluginSelect from './plugin-select.vue'
+import OptionSelect from './option-select.vue'
+import type { LogType } from '../src/log-filter'
+import { getRecordPaths, hasLogFilter, logTypes, matchesLogFilter } from '../src/log-filter'
 
 interface LogPage {
   logs: Logger.Record[]
@@ -65,19 +94,35 @@ interface LogPage {
   hasMore: boolean
 }
 
+type PickerName = 'plugin' | 'level' | 'date'
+
+const levelLabels: Record<LogType, string> = {
+  error: '错误',
+  warn: '警告',
+  info: '信息',
+  success: '成功',
+  debug: '调试',
+}
+
+const levelOptions = logTypes.map(type => ({ value: type, label: levelLabels[type] }))
+
 const selectedPath = ref('')
+const selectedType = ref('')
 const selectedDate = ref('')
+const searchInput = ref('')
+const searchKeyword = ref('')
 const historyLogs = ref<Logger.Record[]>([])
 const historyResetKey = ref(0)
 const dateLogs = ref<Logger.Record[]>([])
 const dateCursor = ref<string | undefined>()
-const showPluginPicker = ref(false)
-const showDatePicker = ref(false)
+const openPicker = ref<PickerName | ''>('')
 const filterElement = ref<HTMLElement | null>(null)
 const isFilterExpanded = ref(false)
 const historyUnloadDelay = 30 * 60 * 1000
+const searchDebounceDelay = 320
 let dateRequestId = 0
 let historyUnloadTimer: ReturnType<typeof setTimeout> | undefined
+let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined
 
 function getPluginLabel(path: string) {
   const entry = findPluginEntry(path, store.config?.plugins)
@@ -119,11 +164,7 @@ function findLoggerPlusConfig(plugins: Record<string, any>): {
   }
 }
 
-function getRecordPaths(record: Logger.Record) {
-  return (record.meta as { paths?: string[] } | undefined)?.paths ?? []
-}
-
-const plugins = computed(() => {
+const pluginOptions = computed(() => {
   const paths = new Set<string>()
   for (const record of [...historyLogs.value, ...(store.logs ?? []), ...dateLogs.value]) {
     for (const path of getRecordPaths(record)) {
@@ -131,23 +172,29 @@ const plugins = computed(() => {
     }
   }
   return [...paths]
-    .map(path => ({ path, label: getPluginLabel(path) }))
+    .map(path => ({ value: path, label: getPluginLabel(path) }))
     .sort((left, right) => left.label.localeCompare(right.label))
 })
+
+const recordFilter = computed(() => ({
+  path: selectedPath.value || undefined,
+  type: selectedType.value || undefined,
+  search: searchKeyword.value || undefined,
+}))
 
 const liveLogs = computed(() => {
   const logs = historyLogs.value.length
     ? mergeLogRecords(historyLogs.value, store.logs ?? [])
     : store.logs ?? []
-  if (!selectedPath.value) return logs
-  return logs.filter(record => getRecordPaths(record).includes(selectedPath.value))
+  if (!hasLogFilter(recordFilter.value)) return logs
+  return logs.filter(record => matchesLogFilter(record, recordFilter.value))
 })
 
 const filteredLogs = computed(() => selectedDate.value ? dateLogs.value : liveLogs.value)
 
-const hasActiveFilter = computed(() => !!selectedPath.value || !!selectedDate.value)
+const hasActiveFilter = computed(() => !!selectedPath.value || !!selectedType.value || !!selectedDate.value || !!searchInput.value)
 
-const isFilterCollapsed = computed(() => !isFilterExpanded.value && !hasActiveFilter.value && !showPluginPicker.value && !showDatePicker.value)
+const isFilterCollapsed = computed(() => !isFilterExpanded.value && !hasActiveFilter.value && !openPicker.value)
 
 const autoUnloadHistoryLogs = computed(() => findLoggerPlusConfig(store.config?.plugins)?.autoUnloadHistoryLogs !== false)
 const preservePausedPositionOnReturn = computed(() => findLoggerPlusConfig(store.config?.plugins)?.preservePausedPositionOnReturn === true)
@@ -177,6 +224,12 @@ function resetHistoryUnloadTimer() {
   historyUnloadTimer = setTimeout(unloadHistoryLogs, historyUnloadDelay)
 }
 
+function applySearchKeyword() {
+  clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = undefined
+  searchKeyword.value = searchInput.value.trim()
+}
+
 async function animateFilterWidth(fromWidth: number) {
   await nextTick()
   const element = filterElement.value
@@ -202,27 +255,28 @@ function expandFilter() {
 function handleDocumentPointerDown(event: PointerEvent) {
   if (filterElement.value?.contains(event.target as Node)) return
   const fromWidth = filterElement.value?.getBoundingClientRect().width
-  showPluginPicker.value = false
-  showDatePicker.value = false
+  openPicker.value = ''
   if (!hasActiveFilter.value) {
     isFilterExpanded.value = false
     if (fromWidth !== undefined) void animateFilterWidth(fromWidth)
   }
 }
 
-function setPluginPickerOpen(open: boolean) {
-  showPluginPicker.value = open
-  if (open) showDatePicker.value = false
+function setPickerOpen(name: PickerName, open: boolean) {
+  if (open) {
+    openPicker.value = name
+  } else if (openPicker.value === name) {
+    openPicker.value = ''
+  }
 }
 
-function setDatePickerOpen(open: boolean) {
-  showDatePicker.value = open
-  if (open) showPluginPicker.value = false
-}
-
-function clearDate() {
+function clearFilters() {
+  selectedPath.value = ''
+  selectedType.value = ''
   selectedDate.value = ''
-  showDatePicker.value = false
+  searchInput.value = ''
+  applySearchKeyword()
+  openPicker.value = ''
 }
 
 function prependLoadedLogs(logs: Logger.Record[], cursor?: string) {
@@ -235,19 +289,27 @@ function prependLoadedLogs(logs: Logger.Record[], cursor?: string) {
   resetHistoryUnloadTimer()
 }
 
-watch([selectedDate, selectedPath], async ([date, path]) => {
-  if (date || path) isFilterExpanded.value = true
+// 关键词会触发服务端读取已保存日志，逐字输入必须先合并成一次请求
+watch(searchInput, () => {
+  clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = setTimeout(applySearchKeyword, searchDebounceDelay)
+})
+
+watch([selectedDate, selectedPath, selectedType, searchKeyword], async ([date, path, type, search]) => {
+  if (date || path || type || search) isFilterExpanded.value = true
   const requestId = ++dateRequestId
   dateLogs.value = []
   dateCursor.value = undefined
   clearHistoryUnloadTimer()
-  if (!date && !path) {
+  if (!date && !path && !type && !search) {
     resetHistoryUnloadTimer()
     return
   }
   const page = await send('logger-plus/load-before', {
     date: date || undefined,
     path: path || undefined,
+    type: type || undefined,
+    search: search || undefined,
   }) as LogPage
   if (requestId !== dateRequestId) return
   if (date) {
@@ -272,6 +334,7 @@ onMounted(() => document.addEventListener('pointerdown', handleDocumentPointerDo
 onUnmounted(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
   clearHistoryUnloadTimer()
+  clearTimeout(searchDebounceTimer)
 })
 
 </script>
@@ -294,7 +357,7 @@ onUnmounted(() => {
   border-radius: 999px;
   box-sizing: border-box;
   width: fit-content;
-  max-width: 44rem;
+  max-width: 48rem;
   min-width: 2.35rem;
   height: 2.35rem;
   min-height: 2.35rem;
@@ -318,7 +381,7 @@ onUnmounted(() => {
 
   &.collapsed {
     width: 3.85rem;
-    max-width: 44rem;
+    max-width: 48rem;
     height: 2.35rem;
     min-height: 2.35rem;
     gap: 0.4rem;
@@ -377,6 +440,32 @@ onUnmounted(() => {
   box-shadow: 0 0 12px #22c55e;
   box-shadow: 0 0 12px color-mix(in srgb, var(--terminal-fg-hover) 55%, #22c55e);
   transition: width 0.16s ease-out, height 0.16s ease-out, background-color 0.16s ease-out, box-shadow 0.16s ease-out;
+}
+
+.logger-filter-search {
+  box-sizing: border-box;
+  flex: 0 1 auto;
+  width: 8rem;
+  min-width: 5rem;
+  height: 1.65rem;
+  color: inherit;
+  background: color-mix(in srgb, var(--terminal-bg) 70%, transparent);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0 0.6rem;
+  font: inherit;
+
+  &::placeholder {
+    color: color-mix(in srgb, var(--terminal-fg) 45%, transparent);
+  }
+
+  &:hover,
+  &:focus-visible {
+    color: var(--terminal-fg-hover);
+    background: color-mix(in srgb, var(--terminal-bg-hover) 72%, var(--terminal-bg));
+    border-color: var(--terminal-separator);
+    outline: none;
+  }
 }
 
 .logger-filter-clear {

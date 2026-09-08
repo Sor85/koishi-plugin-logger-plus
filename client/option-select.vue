@@ -1,10 +1,11 @@
 <template>
-  <div class="plugin-select">
+  <div class="option-select">
     <button
       :id="id"
-      class="plugin-select-trigger"
+      class="option-select-trigger"
       type="button"
       role="combobox"
+      :style="minWidth ? { minWidth } : undefined"
       :tabindex="tabindex"
       :aria-expanded="open"
       aria-haspopup="listbox"
@@ -15,15 +16,15 @@
         <path d="m7 10 5 5 5-5"/>
       </svg>
     </button>
-    <div v-if="open" class="plugin-select-content" role="listbox">
+    <div v-if="open" class="option-select-content" role="listbox">
       <button
         v-for="option in allOptions"
-        :key="option.path"
+        :key="option.value"
         type="button"
         role="option"
-        :aria-selected="option.path === modelValue"
-        :class="{ selected: option.path === modelValue }"
-        @click="select(option.path)"
+        :aria-selected="option.value === modelValue"
+        :class="{ selected: option.value === modelValue }"
+        @click="select(option.value)"
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="m5 12 4 4L19 6"/>
@@ -41,7 +42,9 @@ const props = defineProps<{
   id: string
   modelValue: string
   open: boolean
-  options: Array<{ path: string, label: string }>
+  options: Array<{ value: string, label: string }>
+  emptyLabel: string
+  minWidth?: string
   tabindex?: number
 }>()
 
@@ -50,22 +53,22 @@ const emit = defineEmits<{
   (name: 'update:open', value: boolean): void
 }>()
 
-const allOptions = computed(() => [{ path: '', label: '全部插件' }, ...props.options])
-const selectedLabel = computed(() => allOptions.value.find(option => option.path === props.modelValue)?.label || '全部插件')
+const allOptions = computed(() => [{ value: '', label: props.emptyLabel }, ...props.options])
+const selectedLabel = computed(() => allOptions.value.find(option => option.value === props.modelValue)?.label || props.emptyLabel)
 
-function select(path: string) {
-  emit('update:modelValue', path)
+function select(value: string) {
+  emit('update:modelValue', value)
   emit('update:open', false)
 }
 </script>
 
 <style scoped lang="scss">
-.plugin-select {
+.option-select {
   position: relative;
   display: inline-flex;
 }
 
-.plugin-select-trigger {
+.option-select-trigger {
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
@@ -111,7 +114,7 @@ function select(path: string) {
   }
 }
 
-.plugin-select-content {
+.option-select-content {
   position: absolute;
   top: calc(100% + 0.4rem);
   left: 0;

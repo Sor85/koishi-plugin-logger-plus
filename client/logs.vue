@@ -23,7 +23,7 @@
         v-memo="[getLogKey(record), index]"
         :data-log-index="index"
         :data-log-key="getLogKey(record)"
-        :class="{ line: true, start: isStart(index) }"
+        :class="['line', `level-${record.type}`, { start: isStart(index) }]"
       >
         <code><span v-html="renderPrefix(record)"></span><button
           v-if="getPrimaryPath(record)"
@@ -48,6 +48,19 @@
         </span>
       </div>
     </div>
+    <button
+      :class="['logger-scroll-bottom', { visible: !isViewingLatest }]"
+      type="button"
+      title="回到底部"
+      aria-label="回到底部"
+      :aria-hidden="isViewingLatest"
+      :tabindex="isViewingLatest ? -1 : undefined"
+      @click="returnToLatest"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 5v14M18 13l-6 6-6-6"/>
+      </svg>
+    </button>
   </div>
 </template>
 
@@ -72,6 +85,8 @@ const props = defineProps<{
   loadBefore?: boolean,
   loadDate?: string,
   loadPath?: string,
+  loadType?: string,
+  loadSearch?: string,
   loadCursor?: string,
 }>()
 
@@ -96,6 +111,14 @@ function renderColor(code: number, value: any, decoration = '') {
 }
 
 const showTime = 'yyyy-MM-dd hh:mm:ss'
+// 等级标记的 ANSI 颜色：报错标红，其余等级沿用终端习惯的配色，info 保持正文色。
+// 取 256 色表里的高亮档（9/11/10），暗色终端背景下比 1/3/2 的暗红暗黄对比度更高
+const levelColors: Record<string, number> = {
+  error: 9,
+  warn: 11,
+  success: 10,
+  debug: 8,
+}
 const preloadLogThreshold = 150
 const logList = ref<HTMLElement | null>(null)
 const isFollowing = ref(true)
@@ -163,6 +186,11 @@ function toggleFollow() {
   followLatest()
 }
 
+function returnToLatest() {
+  markViewingLogs()
+  followLatest()
+}
+
 function rememberPausedPosition() {
   const element = logList.value
   if (!props.preservePausedPositionOnReturn || !element || isFollowing.value) return
@@ -193,6 +221,8 @@ async function loadBeforeLogs() {
     const page = await send('logger-plus/load-before', {
       date: props.loadDate || undefined,
       path: props.loadPath || undefined,
+      type: props.loadType || undefined,
+      search: props.loadSearch || undefined,
       cursor: loadCursor.value ?? (firstLog ? `${firstLog.timestamp}:${firstLog.id}` : undefined),
     }) as LogPage
     loadCursor.value = page.cursor
@@ -323,7 +353,10 @@ async function copyLine(record: Logger.Record) {
 
 function renderPrefix(record: Logger.Record) {
   const time = renderColor(8, Time.template(showTime, new Date(record.timestamp)))
-  return converter.ansi_to_html(`${time} [${record.type[0].toUpperCase()}] `)
+  const marker = `[${record.type[0].toUpperCase()}]`
+  const code = levelColors[record.type]
+  const level = code === undefined ? marker : renderColor(code, marker, ';1')
+  return converter.ansi_to_html(`${time} ${level} `)
 }
 
 function renderName(record: Logger.Record) {
@@ -396,6 +429,60 @@ function renderContent(record: Logger.Record) {
   box-shadow: 0 0 12px #f59e0b;
 }
 
+.logger-scroll-bottom {
+  position: absolute;
+  right: 1.35rem;
+  bottom: 1rem;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 2.1rem;
+  height: 2.1rem;
+  color: var(--terminal-fg);
+  color: color-mix(in srgb, var(--terminal-fg) 82%, transparent);
+  background: var(--terminal-bg-hover);
+  background: color-mix(in srgb, var(--terminal-bg-hover) 58%, transparent);
+  border: 1px solid var(--terminal-separator);
+  border-color: color-mix(in srgb, var(--terminal-separator) 70%, var(--terminal-fg));
+  border-radius: 999px;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(0.35rem);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 18%), inset 0 1px 0 rgb(255 255 255 / 8%);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  transition: opacity 0.15s ease, transform 0.18s ease-out, color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+
+  &.visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+
+  &:hover,
+  &:focus-visible {
+    color: var(--terminal-fg-hover);
+    background: var(--terminal-bg-hover);
+    background: color-mix(in srgb, var(--terminal-bg-hover) 72%, var(--terminal-bg));
+    border-color: var(--terminal-separator);
+    outline: none;
+  }
+
+  svg {
+    width: 1.05rem;
+    height: 1.05rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+}
+
 .log-list {
   box-sizing: border-box;
   height: 100%;
@@ -446,6 +533,16 @@ function renderContent(record: Logger.Record) {
 
     ::selection {
       background-color: var(--terminal-bg-selection);
+    }
+  }
+
+  // 报错整行标红，便于在长堆栈里定位失败的那一条
+  .line.level-error {
+    background-color: color-mix(in srgb, #f85149 16%, transparent);
+
+    &:hover {
+      color: var(--terminal-fg-hover);
+      background-color: color-mix(in srgb, #f85149 26%, transparent);
     }
   }
 
