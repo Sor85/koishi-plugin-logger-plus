@@ -116,6 +116,52 @@ test('按插件筛选时即使未开启启动加载历史日志，也能读取�
   }
 })
 
+test('单个文件里有十万级记录时仍能读取分页', async () => {
+  const baseDir = await mkdtemp(join(tmpdir(), 'logger-plus-'))
+  const root = join(baseDir, 'logs')
+  const date = '2026-05-25'
+  const start = Date.parse(`${date}T00:00:00.000Z`)
+  // 阈值实测在 10 万到 12.5 万实参之间，取 13 万确保覆盖 push(...records) 的崩溃点
+  const total = 130000
+  const console: FakeConsole = {
+    addListener(event, callback) {
+      if (event === 'logger-plus/load-before') this.listener = callback
+    },
+    patch() {},
+  }
+  const ctx = new FakeContext(baseDir, console)
+
+  try {
+    await mkdir(root)
+    const lines: string[] = []
+    for (let id = 1; id <= total; id++) {
+      lines.push(JSON.stringify(createRecord(id, start + id, 'plugin.alpha')))
+    }
+    await writeFile(join(root, `${date}-1.log`), lines.join('\n') + '\n', 'utf8')
+    await apply(ctx as any, {
+      root: 'logs',
+      maxAge: 0,
+      maxSize: 1024 * 1024 * 64,
+      showRecentLogsOnStartup: false,
+      autoUnloadHistoryLogs: true,
+      preservePausedPositionOnReturn: false,
+    })
+
+    assert.ok(console.listener)
+    const page = await console.listener({ path: 'plugin.alpha' }) as {
+      logs: Logger.Record[]
+      hasMore: boolean
+    }
+
+    assert.equal(page.logs.length, 200)
+    assert.equal(page.logs[page.logs.length - 1].id, total)
+    assert.equal(page.hasMore, true)
+  } finally {
+    ctx.dispose()
+    await rm(baseDir, { recursive: true, force: true })
+  }
+})
+
 test('按等级和关键词筛选时同样读取已保存的日志', async () => {
   const baseDir = await mkdtemp(join(tmpdir(), 'logger-plus-'))
   const root = join(baseDir, 'logs')

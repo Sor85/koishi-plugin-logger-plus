@@ -177,7 +177,11 @@ export async function apply(ctx: Context, config: Config) {
           reportFileError(error)
           return ''
         })
-        records.push(...parseRecords(text))
+        // 单个文件的记录数会随 maxSize 上到十万级，push(...records) 一超过实参上限就是
+        // RangeError，而且崩在「查历史日志」这条路上，只能逐条追加。
+        for (const record of parseRecords(text)) {
+          records.push(record)
+        }
       }
     }
     return sortLogs(records)
