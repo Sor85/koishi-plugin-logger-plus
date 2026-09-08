@@ -4,10 +4,6 @@
 -->
 <template>
   <div class="logger-container">
-    <button :class="['logger-follow', { visible: showFollowStatus, active: isFollowing }]" type="button" @click="toggleFollow">
-      <span class="logger-follow-dot"></span>
-      {{ isFollowing ? '追踪中' : '已暂停' }}
-    </button>
     <div
       v-overlay-scrollbar
       ref="logList"
@@ -161,7 +157,6 @@ const menuViewportGap = 8
 const logList = ref<HTMLElement | null>(null)
 const isFollowing = ref(true)
 const isViewingLatest = ref(true)
-const showFollowStatus = ref(false)
 const loadingBefore = ref(false)
 const loadCursor = ref<string | undefined>()
 const hasMoreBefore = ref(true)
@@ -173,7 +168,6 @@ watch(() => props.loadCursor, (cursor) => {
   loadCursor.value = cursor
 })
 let lastScrollTop = 0
-let followStatusTimer: ReturnType<typeof setTimeout> | undefined
 let pausedPosition: PausedLogPosition | undefined
 
 const listStyle = computed(() => props.maxHeight ? { maxHeight: props.maxHeight } : {})
@@ -194,20 +188,10 @@ function updateViewingLatest() {
   lastScrollTop = element.scrollTop
 }
 
-function updateFollowStatusVisibility() {
-  showFollowStatus.value = true
-  clearTimeout(followStatusTimer)
-  if (!isFollowing.value) return
-  followStatusTimer = setTimeout(() => {
-    showFollowStatus.value = false
-  }, 1600)
-}
-
 function setFollowing(value: boolean) {
   if (isFollowing.value === value) return
   isFollowing.value = value
   if (value) pausedPosition = undefined
-  updateFollowStatusVisibility()
 }
 
 function followLatest() {
@@ -218,16 +202,6 @@ function followLatest() {
 
 function markViewingLogs() {
   emit('view-logs')
-}
-
-function toggleFollow() {
-  markViewingLogs()
-  if (isFollowing.value) {
-    setFollowing(false)
-    rememberPausedPosition()
-    return
-  }
-  followLatest()
 }
 
 function returnToLatest() {
@@ -372,7 +346,6 @@ onUnmounted(() => {
   document.removeEventListener('keydown', handleDocumentKeydown)
   window.removeEventListener('resize', closeLogMenu)
   window.removeEventListener('blur', closeLogMenu)
-  clearTimeout(followStatusTimer)
 })
 
 onActivated(() => {
@@ -498,58 +471,6 @@ function renderContent(record: Logger.Record) {
 .logger-container {
   position: relative;
   height: 100%;
-}
-
-.logger-follow {
-  position: absolute;
-  top: 0.75rem;
-  right: 1rem;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  color: var(--terminal-fg);
-  color: color-mix(in srgb, var(--terminal-fg) 82%, transparent);
-  background: var(--terminal-bg-hover);
-  background: color-mix(in srgb, var(--terminal-bg-hover) 58%, transparent);
-  border: 1px solid var(--terminal-separator);
-  border-color: color-mix(in srgb, var(--terminal-separator) 70%, var(--terminal-fg));
-  border-radius: 999px;
-  padding: 0.35rem 0.75rem;
-  line-height: 1.25rem;
-  cursor: pointer;
-  opacity: 0;
-  box-shadow: 0 10px 28px rgb(0 0 0 / 18%), inset 0 1px 0 rgb(255 255 255 / 8%);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
-  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
-
-  &.visible,
-  &:hover,
-  &:focus-visible {
-    opacity: 1;
-  }
-
-  &:hover,
-  &:focus-visible {
-    color: var(--terminal-fg-hover);
-    background: var(--terminal-bg-hover);
-    background: color-mix(in srgb, var(--terminal-bg-hover) 72%, var(--terminal-bg));
-    border-color: var(--terminal-separator);
-  }
-
-  &.active .logger-follow-dot {
-    background: #22c55e;
-    box-shadow: 0 0 12px #22c55e;
-  }
-}
-
-.logger-follow-dot {
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 999px;
-  background: #f59e0b;
-  box-shadow: 0 0 12px #f59e0b;
 }
 
 .logger-scroll-bottom {

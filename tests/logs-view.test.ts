@@ -72,12 +72,19 @@ test('筛选控件使用紧凑的 Vue 下拉菜单和日历', async () => {
   assert.match(indexSource, /element\.animate\(\[\s*\{ width: `\$\{fromWidth\}px` \}/)
 })
 
-test('筛选和追踪胶囊使用毛玻璃背景', async () => {
+test('筛选胶囊和回到底部按钮使用毛玻璃背景', async () => {
   const indexSource = await readSource('../client/index.vue')
   const logsSource = await readSource('../client/logs.vue')
 
   assert.match(indexSource, /\.logger-filter\s*\{[\s\S]*backdrop-filter:\s*blur\(18px\) saturate\(140%\);/)
-  assert.match(logsSource, /\.logger-follow\s*\{[\s\S]*backdrop-filter:\s*blur\(18px\) saturate\(140%\);/)
+  assert.match(logsSource, /\.logger-scroll-bottom\s*\{[\s\S]*backdrop-filter:\s*blur\(18px\) saturate\(140%\);/)
+})
+
+test('日志页不再显示追踪状态胶囊', async () => {
+  const source = await readSource('../client/logs.vue')
+
+  assert.doesNotMatch(source, /logger-follow/)
+  assert.doesNotMatch(source, /已暂停|追踪中/)
 })
 
 test('报错日志整行标红并给等级标记着色', async () => {
