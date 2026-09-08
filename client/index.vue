@@ -1,5 +1,5 @@
 <template>
-  <k-layout>
+  <div class="logger-page">
     <div
       ref="filterElement"
       :class="['logger-filter', { collapsed: isFilterCollapsed }]"
@@ -58,7 +58,6 @@
     </div>
     <logs
       :key="`${selectedPath}:${selectedType}:${searchKeyword}:${selectedDate}:${historyResetKey}`"
-      class="layout-logger"
       :logs="filteredLogs"
       show-link
       reset-follow-on-enter
@@ -73,7 +72,7 @@
       @view-logs="resetHistoryUnloadTimer"
       @filter-path="selectedPath = $event"
     ></logs>
-  </k-layout>
+  </div>
 </template>
 
 <script lang="ts" setup>
@@ -341,6 +340,23 @@ onUnmounted(() => {
 
 <style scoped lang="scss">
 
+// 不使用 k-layout：顶栏由它生成，去掉即可。底部状态栏是控制台的全局固定元素（z-index 50），
+// 不在本页 DOM 里，因此这里铺到 bottom: 0 并抬高层级把它盖住。
+// 左边界仍需避让固定活动栏，不能从视口 left: 0 开始。
+.logger-page {
+  position: fixed;
+  z-index: 100;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--activity-width, 4rem);
+  box-sizing: border-box;
+  overflow: hidden;
+  background-color: var(--terminal-bg);
+  font-size: var(--logger-font-size);
+  line-height: var(--logger-line-height);
+}
+
 .logger-filter {
   position: absolute;
   top: 0.75rem;
@@ -423,7 +439,7 @@ onUnmounted(() => {
   label {
     color: var(--terminal-fg);
     color: color-mix(in srgb, var(--terminal-fg) 78%, transparent);
-    font-size: 12px;
+    font-size: var(--logger-label-font-size);
     letter-spacing: 0.04em;
     white-space: nowrap;
   }

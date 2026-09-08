@@ -131,3 +131,68 @@ test('等级和关键词条件同时作用于实时日志与历史日志分页',
   assert.match(indexSource, /watch\(\[selectedDate, selectedPath, selectedType, searchKeyword\]/)
   assert.match(logsSource, /type: props\.loadType \|\| undefined,\s*search: props\.loadSearch \|\| undefined,/)
 })
+
+test('警告日志整行标黄', async () => {
+  const source = await readSource('../client/logs.vue')
+
+  assert.match(source, /\.line\.level-warn\s*\{[\s\S]*background-color:\s*color-mix\(in srgb, #d29922 16%, transparent\);/)
+  assert.match(source, /\.line\.level-warn\s*\{[\s\S]*&:hover\s*\{[\s\S]*background-color:\s*color-mix\(in srgb, #d29922 26%, transparent\);/)
+})
+
+test('日志页不使用 k-layout，并铺满到状态栏所在位置', async () => {
+  const source = await readSource('../client/index.vue')
+
+  assert.doesNotMatch(source, /<\/?k-layout/)
+  assert.match(source, /<div class="logger-page">/)
+  assert.match(source, /\.logger-page\s*\{[\s\S]*position:\s*fixed;/)
+  assert.match(source, /\.logger-page\s*\{[\s\S]*left:\s*var\(--activity-width, 4rem\);/)
+  assert.match(source, /\.logger-page\s*\{[\s\S]*bottom:\s*0;/)
+  assert.match(source, /\.logger-page\s*\{[\s\S]*z-index:\s*100;/)
+})
+
+test('根容器与右键菜单都显式声明排版基准', async () => {
+  const indexSource = await readSource('../client/index.vue')
+  const logsSource = await readSource('../client/logs.vue')
+  const styleSource = await readSource('../client/index.scss')
+
+  assert.match(styleSource, /--logger-font-size:\s*14px;/)
+  assert.match(styleSource, /--logger-line-height:\s*20px;/)
+  assert.match(styleSource, /--logger-label-font-size:\s*12px;/)
+  assert.match(indexSource, /\.logger-page\s*\{[\s\S]*font-size:\s*var\(--logger-font-size\);[\s\S]*line-height:\s*var\(--logger-line-height\);/)
+  assert.match(logsSource, /\.logger-menu\s*\{[\s\S]*font-size:\s*var\(--logger-font-size\);[\s\S]*line-height:\s*var\(--logger-line-height\);/)
+  assert.doesNotMatch(logsSource, /\.line\s*\{[\s\S]*font-size:\s*14px;/)
+})
+
+test('滚到顶部后由按钮触发加载更早日志，不再自动预加载', async () => {
+  const source = await readSource('../client/logs.vue')
+
+  assert.match(source, /class="log-load-more-button"/)
+  assert.match(source, /@click="loadBeforeLogs"/)
+  assert.match(source, /\{\{ loadingBefore \? '正在加载' : '查看更多消息' \}\}/)
+  assert.match(source, /const showLoadMore = computed\(\(\) => Boolean\(props\.loadBefore\) && hasMoreBefore\.value\)/)
+  assert.match(source, /\.log-load-more-button\s*\{[\s\S]*height:\s*var\(--logger-line-height\);\s*margin-top:\s*-1rem;/)
+  assert.doesNotMatch(source, /preloadLogThreshold/)
+  assert.doesNotMatch(source, /getVisibleStartIndex/)
+})
+
+test('右键日志行弹出复制候选菜单', async () => {
+  const source = await readSource('../client/logs.vue')
+
+  assert.match(source, /@contextmenu\.prevent="openLogMenu\(record, \$event\)"/)
+  assert.match(source, /<Teleport to="body">/)
+  assert.match(source, /class="logger-menu"/)
+  assert.match(source, /label: '复制选中文本'/)
+  assert.match(source, /label: '复制整行日志'/)
+  assert.match(source, /label: '复制日志正文'/)
+  assert.match(source, /label: '复制来源名称'/)
+  assert.match(source, /label: '复制时间'/)
+  assert.match(source, /function handleDocumentKeydown\(event: KeyboardEvent\) \{\s*if \(event\.key === 'Escape'\) closeLogMenu\(\)/)
+  assert.match(source, /document\.removeEventListener\('pointerdown', handleDocumentPointerDown\)/)
+})
+
+test('复制到剪贴板前去掉正文里的 ANSI 转义序列', async () => {
+  const source = await readSource('../client/logs.vue')
+
+  assert.match(source, /function stripAnsi\(value: string\) \{\s*return value\.replace\(\/\\u001b\\\[\[0-9;\]\*m\/g, ''\)/)
+  assert.match(source, /const content = color \? record\.content : stripAnsi\(record\.content\)/)
+})

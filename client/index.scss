@@ -6,4 +6,10 @@
   --terminal-bg-selection: rgba(33,139,255,0.15);
   --terminal-separator: rgba(140,149,159,0.75);
   --terminal-timestamp: #8c959f;
+
+  // 日志页自建根容器，不再由 k-layout 提供字号；正文与浮层都必须取这里的令牌，
+  // 不能落回控制台或浏览器的继承值
+  --logger-font-size: 14px;
+  --logger-line-height: 20px;
+  --logger-label-font-size: 12px;
 }
