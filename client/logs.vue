@@ -37,21 +37,13 @@
           @click="filterByRecord(record)"
           v-html="renderName(record)"
         ></button><span v-else v-html="renderName(record)"></span><span v-html="renderContent(record)"></span></code>
-        <span class="log-actions">
-          <button class="log-action" type="button" title="复制整段日志" @click="copyLine(record)">
-            <k-icon name="activity:copy"/>
-          </button>
-          <router-link
-            class="log-action"
-            v-if="showLink && store.config && store.packages && record.meta?.paths?.length"
-            :to="'/plugins/' + record.meta.paths[0].replace(/\./, '/')"
-            title="前往插件配置"
-          >
-            <k-icon name="arrow-right"/>
-          </router-link>
-        </span>
       </div>
     </div>
+    <span
+      class="log-scrollbar-gutter"
+      :style="{ width: scrollbarGutterWidth }"
+      aria-hidden="true"
+    ></span>
     <button
       :class="['logger-scroll-bottom', { visible: !isViewingLatest }]"
       type="button"
@@ -93,6 +85,7 @@ import {} from '@koishijs/plugin-config'
 import Logger from 'reggol'
 import ansi from 'ansi_up'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import type { PausedLogPosition } from './log-position'
 import { capturePausedLogPosition, restorePausedLogPosition } from './log-position'
 import { getLogKey } from './log-record'
@@ -154,9 +147,11 @@ const levelColors: Record<string, number> = {
 }
 // 右键菜单贴边时的安全距离，避免弹到视口外
 const menuViewportGap = 8
+const router = useRouter()
 const logList = ref<HTMLElement | null>(null)
 const isFollowing = ref(true)
 const isViewingLatest = ref(true)
+const nativeScrollbarWidth = ref(0)
 const loadingBefore = ref(false)
 const loadCursor = ref<string | undefined>()
 const hasMoreBefore = ref(true)
@@ -175,6 +170,10 @@ const listStyle = computed(() => props.maxHeight ? { maxHeight: props.maxHeight 
 // 更早的日志改为手动加载：滑到顶部才会看到这个入口，点击后才继续读取磁盘
 const showLoadMore = computed(() => Boolean(props.loadBefore) && hasMoreBefore.value)
 
+// 遮罩至少铺满列表右侧内边距：占位型滚动条按实测宽度盖住，覆盖式滚动条画在内边距上也一并盖住。
+// 内边距区域本来就没有内容，铺同色底不会遮住日志正文
+const scrollbarGutterWidth = computed(() => `max(1rem, ${nativeScrollbarWidth.value}px)`)
+
 function scrollToBottom() {
   if (!logList.value) return
   logList.value.scrollTop = logList.value.scrollHeight
@@ -188,7 +187,13 @@ function updateViewingLatest() {
   lastScrollTop = element.scrollTop
 }
 
-function setFollowing(value: boolean) {
+// 少数浏览器与用户样式会忽略 scrollbar-width / scrollbar-color，仍然给日志列表画出原生滚动条，
+// 轨道底色比日志区域更深，右侧会出现一条竖带。实测滚动条占位宽度，交给同色遮罩盖平。
+function updateNativeScrollbarWidth() {
+  const element = logList.value
+  if (!element) return
+  nativeScrollbarWidth.value = Math.max(0, element.offsetWidth - element.clientWidth)
+}function setFollowing(value: boolean) {
   if (isFollowing.value === value) return
   isFollowing.value = value
   if (value) pausedPosition = undefined
@@ -295,6 +300,10 @@ const logMenuItems = computed<LogMenuItem[]>(() => {
   items.push({ key: 'content', label: '复制日志正文', run: () => copyText(stripAnsi(record.content), '已复制日志正文') })
   items.push({ key: 'name', label: '复制来源名称', run: () => copyText(record.name, '已复制来源名称') })
   items.push({ key: 'time', label: '复制时间', run: () => copyText(formatTime(record), '已复制时间') })
+  const pluginRoute = getPluginRoute(record)
+  if (pluginRoute) {
+    items.push({ key: 'plugin', label: '前往插件配置', run: () => router.push(pluginRoute) })
+  }
   return items
 })
 
@@ -334,10 +343,14 @@ function handleDocumentKeydown(event: KeyboardEvent) {
 }
 
 onMounted(() => {
-  requestAnimationFrame(scrollToBottom)
+  requestAnimationFrame(() => {
+    scrollToBottom()
+    updateNativeScrollbarWidth()
+  })
   document.addEventListener('pointerdown', handleDocumentPointerDown)
   document.addEventListener('keydown', handleDocumentKeydown)
   window.addEventListener('resize', closeLogMenu)
+  window.addEventListener('resize', updateNativeScrollbarWidth)
   window.addEventListener('blur', closeLogMenu)
 })
 
@@ -345,6 +358,7 @@ onUnmounted(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
   document.removeEventListener('keydown', handleDocumentKeydown)
   window.removeEventListener('resize', closeLogMenu)
+  window.removeEventListener('resize', updateNativeScrollbarWidth)
   window.removeEventListener('blur', closeLogMenu)
 })
 
@@ -374,6 +388,7 @@ watch(() => props.logs.length, async () => {
   requestAnimationFrame(() => {
     if (isFollowing.value) scrollToBottom()
     updateViewingLatest()
+    updateNativeScrollbarWidth()
   })
 })
 
@@ -409,6 +424,14 @@ function getPrimaryPath(record: Logger.Record) {
   return record.meta?.paths?.[0]
 }
 
+// 跳转入口收进右键菜单：只有配置数据已同步且日志带插件路径时才给出这一项
+function getPluginRoute(record: Logger.Record) {
+  if (!props.showLink || !store.config || !store.packages) return
+  const path = getPrimaryPath(record)
+  if (!path) return
+  return '/plugins/' + path.replace(/\./, '/')
+}
+
 function filterByRecord(record: Logger.Record) {
   const path = getPrimaryPath(record)
   if (path) emit('filter-path', path)
@@ -441,10 +464,6 @@ async function copyText(text: string, hint: string) {
   } catch {
     message.error('复制失败')
   }
-}
-
-async function copyLine(record: Logger.Record) {
-  await copyText(formatLine(record), '已复制日志')
 }
 
 function renderPrefix(record: Logger.Record) {
@@ -570,11 +589,6 @@ function renderContent(record: Logger.Record) {
       background-color: var(--terminal-bg-hover);
     }
 
-    &:hover .log-actions,
-    &:focus-within .log-actions {
-      opacity: 1;
-    }
-
     ::selection {
       background-color: var(--terminal-bg-selection);
     }
@@ -635,16 +649,6 @@ function renderContent(record: Logger.Record) {
     }
   }
 
-  .log-actions {
-    position: absolute;
-    right: 0.25rem;
-    bottom: 0;
-    display: inline-flex;
-    align-items: center;
-    opacity: 0;
-    transition: opacity 0.15s ease;
-  }
-
   .log-name {
     color: inherit;
     background: transparent;
@@ -659,25 +663,19 @@ function renderContent(record: Logger.Record) {
     }
   }
 
-  .log-action {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 20px;
-    height: 20px;
-    color: inherit;
-    background: transparent;
-    border: none;
-    padding: 0 0.25rem;
-    cursor: pointer;
-    line-height: 20px;
-    text-decoration: none;
+}
 
-    &:hover {
-      color: var(--terminal-fg-hover);
-    }
-  }
-
+// 遮住原生滚动条轨道：轨道底色比日志区域更深，会在右侧留下一条竖带。
+// 宽度由 scrollbarGutterWidth 给出，至少盖住列表右侧内边距；
+// pointer-events: none 保证原生滚动条仍可拖动，自绘滑块挂在 body 上层级更高，不会被遮住。
+.log-scrollbar-gutter {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  background-color: var(--terminal-bg);
+  pointer-events: none;
 }
 
 // 右键菜单挂到 body，避开日志滚动容器的裁剪；脱离根容器后必须自己声明排版基准

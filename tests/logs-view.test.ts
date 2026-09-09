@@ -87,6 +87,29 @@ test('日志页不再显示追踪状态胶囊', async () => {
   assert.doesNotMatch(source, /已暂停|追踪中/)
 })
 
+test('日志行不再渲染行尾图标按钮', async () => {
+  const logsSource = await readSource('../client/logs.vue')
+  const iconSource = await readSource('../client/icons/index.ts')
+
+  assert.doesNotMatch(logsSource, /log-action/)
+  assert.doesNotMatch(logsSource, /k-icon/)
+  assert.doesNotMatch(logsSource, /router-link/)
+  assert.doesNotMatch(iconSource, /activity:copy/)
+})
+
+test('原生滚动条区域用同色遮罩铺平轨道底色', async () => {
+  const source = await readSource('../client/logs.vue')
+
+  assert.match(source, /class="log-scrollbar-gutter"/)
+  assert.match(source, /:style="\{ width: scrollbarGutterWidth \}"/)
+  assert.match(source, /const scrollbarGutterWidth = computed\(\(\) => `max\(1rem, \$\{nativeScrollbarWidth\.value\}px\)`\)/)
+  assert.match(source, /nativeScrollbarWidth\.value = Math\.max\(0, element\.offsetWidth - element\.clientWidth\)/)
+  assert.match(source, /\.log-scrollbar-gutter\s*\{[\s\S]*background-color:\s*var\(--terminal-bg\);/)
+  assert.match(source, /\.log-scrollbar-gutter\s*\{[\s\S]*pointer-events:\s*none;/)
+  assert.match(source, /window\.addEventListener\('resize', updateNativeScrollbarWidth\)/)
+  assert.match(source, /window\.removeEventListener\('resize', updateNativeScrollbarWidth\)/)
+})
+
 test('报错日志整行标红并给等级标记着色', async () => {
   const source = await readSource('../client/logs.vue')
 
@@ -193,6 +216,7 @@ test('右键日志行弹出复制候选菜单', async () => {
   assert.match(source, /label: '复制日志正文'/)
   assert.match(source, /label: '复制来源名称'/)
   assert.match(source, /label: '复制时间'/)
+  assert.match(source, /label: '前往插件配置'/)
   assert.match(source, /function handleDocumentKeydown\(event: KeyboardEvent\) \{\s*if \(event\.key === 'Escape'\) closeLogMenu\(\)/)
   assert.match(source, /document\.removeEventListener\('pointerdown', handleDocumentPointerDown\)/)
 })
