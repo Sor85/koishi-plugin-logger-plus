@@ -8,7 +8,7 @@
 
 **Blocked by:** 03 — 补 8 条 LogViewport 行为测试
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] 暂停位置 module 的两个函数并入核心，其文件删除
 - [ ] 该 module 的 4 条测试删除（覆盖已由 03 的前插与窗口外恢复两条取代）

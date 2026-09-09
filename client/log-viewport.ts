@@ -16,15 +16,20 @@
  * 5. 找不到锚点时不强行恢复，保持当前位置。
  */
 
-import type { PausedLogPosition } from './log-position'
-import { capturePausedLogPosition, restorePausedLogPosition } from './log-position'
 import type { ViewportHost } from './viewport-host'
-import { asAnchorElement } from './viewport-host'
 import type { VirtualListWindow } from './virtual-list'
 import { createVirtualListLayout } from './virtual-list'
 
-/** 视口内第一条可见日志的稳定标识与相对偏移 */
-export type LogAnchor = PausedLogPosition
+/**
+ * 视口内第一条可见日志的稳定标识与相对偏移。
+ *
+ * 只存 `scrollTop` 在前插内容、容器布局变化、跨页面往返之后都会偏掉，
+ * 因此位置一律按「哪条日志 + 它离视口顶部多远」来记。
+ */
+export interface LogAnchor {
+  key: string
+  offset: number
+}
 
 export interface LogViewportState {
   /** 需要渲染的日志区间与上下占位高度 */
@@ -112,15 +117,24 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
     host.scrollTo(scrollTop)
   }
 
-  function captureAnchor() {
-    const element = asAnchorElement(host)
-    return element ? capturePausedLogPosition(element) : undefined
+  // 取视口内第一条可见日志：它的下沿还没滑出容器顶部就算可见。
+  // 容器已离开 DOM 时 metrics() 给不出几何，此时读到的位置不稳定，不能记
+  function captureAnchor(): LogAnchor | undefined {
+    if (!host.metrics()) return undefined
+    const line = host.lines().find(item => item.top + item.height >= 0)
+    if (!line) return undefined
+    return { key: line.key, offset: line.top }
   }
 
-  // 不变量 5：找不到锚点时保持当前位置，不强行恢复
+  // 按「当前相对偏移 - 记录时的相对偏移」把位置挪回去。
+  // 不变量 5：锚点那条日志已经不在渲染窗口里时保持当前位置，不强行恢复
   function restoreAnchor(anchor?: LogAnchor) {
-    const element = asAnchorElement(host)
-    return element ? restorePausedLogPosition(element, anchor) : false
+    const metrics = host.metrics()
+    if (!metrics || !anchor) return false
+    const line = host.lines().find(item => item.key === anchor.key)
+    if (!line) return false
+    scrollTo(metrics.scrollTop + line.top - anchor.offset)
+    return true
   }
 
   // 按当前滚动位置算出要渲染的日志区间。窗口吃的是内容坐标而非滚动位置：

@@ -88,31 +88,3 @@ export function createDomViewportHost(options: DomViewportHostOptions): Viewport
     },
   }
 }
-
-/**
- * 临时桥接：暂停位置 module 仍按 HTMLElement 的形状读写滚动几何。
- *
- * `lines()` 给出的偏移已经相对滚动容器视口顶部，因此容器矩形的 top 取 0；
- * 写 scrollTop 转发给 host。该 module 并入协调核心之后这个函数一并删除。
- */
-export function asAnchorElement(host: ViewportHost): HTMLElement | undefined {
-  const metrics = host.metrics()
-  if (!metrics) return undefined
-  const lines = host.lines().map(line => ({
-    dataset: { logKey: line.key },
-    getBoundingClientRect: () => ({ top: line.top, bottom: line.top + line.height }),
-  }))
-  return {
-    isConnected: true,
-    get scrollTop() {
-      return host.metrics()?.scrollTop ?? metrics.scrollTop
-    },
-    set scrollTop(value: number) {
-      // 位置没变就不下发：修正量为零时不该记成一次滚动写入
-      if (host.metrics()?.scrollTop === value) return
-      host.scrollTo(value)
-    },
-    getBoundingClientRect: () => ({ top: 0 }),
-    querySelectorAll: () => lines,
-  } as unknown as HTMLElement
-}

@@ -1,6 +1,6 @@
 # refactor：把日志视口协调逻辑收进 LogViewport module
 
-Status: ready-for-agent
+Status: done
 
 ## Problem Statement
 

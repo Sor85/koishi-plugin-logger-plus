@@ -46,7 +46,9 @@ container.scrollTop += beforeOffset - savedOffset
 
 # 日志列表虚拟滚动约束
 
-日志列表只渲染视口窗口内的行（见 `client/virtual-list.ts` 与 `client/logs.vue`）。窗口外的行不在 DOM 里，任何依赖「所有行都能查到」的逻辑都要改成按布局换算。
+日志列表只渲染视口窗口内的行。窗口外的行不在 DOM 里，任何依赖「所有行都能查到」的逻辑都要改成按布局换算。
+
+滚动协调集中在 `client/log-viewport.ts`：本节与上节的硬约束在那里都有对应的注释锚点，改动前先读它。它通过 `client/viewport-host.ts` 的四方法 seam 与 DOM 隔开，`client/use-log-viewport.ts` 只负责 ref 绑定、生命周期与调度注入，布局算法留在 `client/virtual-list.ts`。
 
 ## 占位必须用内边距，不能用 transform
 
