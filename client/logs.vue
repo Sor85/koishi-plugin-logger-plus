@@ -20,23 +20,30 @@
         :disabled="loadingBefore"
         @click="loadBeforeLogs"
       >{{ loadingBefore ? '正在加载' : '查看更多消息' }}</button>
+      <!-- 虚拟滚动：只渲染窗口内的日志行，窗口外的高度由上下内边距占位 -->
       <div
-        v-for="(record, index) in logs"
-        :key="getLogKey(record)"
-        v-memo="[getLogKey(record), index]"
-        :data-log-index="index"
-        :data-log-key="getLogKey(record)"
-        :class="['line', `level-${record.type}`, { start: isStart(index) }]"
-        @contextmenu.prevent="openLogMenu(record, $event)"
+        ref="logViewport"
+        class="log-viewport"
+        :style="{ paddingTop: `${logWindow.paddingTop}px`, paddingBottom: `${logWindow.paddingBottom}px` }"
       >
-        <code><span v-html="renderPrefix(record)"></span><button
-          v-if="getPrimaryPath(record)"
-          class="log-name"
-          type="button"
-          :title="`筛选 ${record.name} 的日志`"
-          @click="filterByRecord(record)"
-          v-html="renderName(record)"
-        ></button><span v-else v-html="renderName(record)"></span><span v-html="renderContent(record)"></span></code>
+        <div
+          v-for="item in visibleLogs"
+          :key="item.key"
+          v-memo="[item.key, item.index, item.start]"
+          :data-log-index="item.index"
+          :data-log-key="item.key"
+          :class="['line', `level-${item.record.type}`, { start: item.start }]"
+          @contextmenu.prevent="openLogMenu(item.record, $event)"
+        >
+          <code><span v-html="renderPrefix(item.record)"></span><button
+            v-if="getPrimaryPath(item.record)"
+            class="log-name"
+            type="button"
+            :title="`筛选 ${item.record.name} 的日志`"
+            @click="filterByRecord(item.record)"
+            v-html="renderName(item.record)"
+          ></button><span v-else v-html="renderName(item.record)"></span><span v-html="renderContent(item.record)"></span></code>
+        </div>
       </div>
     </div>
     <span
@@ -90,6 +97,8 @@ import type { PausedLogPosition } from './log-position'
 import { capturePausedLogPosition, restorePausedLogPosition } from './log-position'
 import { getLogKey } from './log-record'
 import { vOverlayScrollbar } from './overlay-scrollbar'
+import type { VirtualListWindow } from './virtual-list'
+import { createVirtualListLayout } from './virtual-list'
 
 const props = defineProps<{
   logs: Logger.Record[],
@@ -129,6 +138,13 @@ interface LogMenuState {
   selection: string
 }
 
+interface VisibleLog {
+  key: string
+  index: number
+  record: Logger.Record
+  start: boolean
+}
+
 // this package does not have consistent exports in different environments
 const converter = new (ansi['default'] || ansi)()
 converter.escape_for_html = true
@@ -148,8 +164,13 @@ const levelColors: Record<string, number> = {
 }
 // 右键菜单贴边时的安全距离，避免弹到视口外
 const menuViewportGap = 8
+// 虚拟滚动在视口上下各多渲染的高度：滑进新窗口之前先备好这一段，避免出现空白
+const overscanHeight = 600
+// 取不到实测行高时的估算值，与 --logger-line-height 一致
+const fallbackLineHeight = 20
 const router = useRouter()
 const logList = ref<HTMLElement | null>(null)
+const logViewport = ref<HTMLElement | null>(null)
 const isFollowing = ref(true)
 const isViewingLatest = ref(true)
 const nativeScrollbarWidth = ref(0)
@@ -159,14 +180,34 @@ const hasMoreBefore = ref(true)
 const logMenu = ref<LogMenuState | null>(null)
 const logMenuElement = ref<HTMLElement | null>(null)
 const logMenuStyle = ref({ left: '0px', top: '0px' })
+const logWindow = ref<VirtualListWindow>({ start: 0, end: 0, paddingTop: 0, paddingBottom: 0 })
 
 watch(() => props.loadCursor, (cursor) => {
   loadCursor.value = cursor
 })
 let lastScrollTop = 0
 let pausedPosition: PausedLogPosition | undefined
+const layout = createVirtualListLayout(fallbackLineHeight)
+// 日志行的 offsetTop 相对滚动容器的内边距盒，占位容器之前还有「查看更多消息」和顶部内边距
+let contentTop = 0
+let listWidth = 0
+let windowFrame = 0
+// 恢复滚动位置期间不让逐帧的高度修正插手，避免两处同时改 scrollTop 互相打断
+let restoringPosition = false
+let listResizeObserver: ResizeObserver | undefined
 
 const listStyle = computed(() => props.maxHeight ? { maxHeight: props.maxHeight } : {})
+
+// 只把窗口内的日志交给模板；下标取全量清单里的绝对下标，分隔行判定与锚点都依赖它
+const visibleLogs = computed(() => {
+  const items: VisibleLog[] = []
+  for (let index = logWindow.value.start; index < logWindow.value.end; index++) {
+    const record = props.logs[index]
+    if (!record) continue
+    items.push({ key: getLogKey(record), index, record, start: isStart(index) })
+  }
+  return items
+})
 
 // 更早的日志改为手动加载：滑到顶部才会看到这个入口，点击后才继续读取磁盘
 const showLoadMore = computed(() => Boolean(props.loadBefore) && hasMoreBefore.value)
@@ -178,7 +219,112 @@ const scrollbarGutterWidth = computed(() => `max(1rem, ${nativeScrollbarWidth.va
 function scrollToBottom() {
   if (!logList.value) return
   logList.value.scrollTop = logList.value.scrollHeight
+  syncLogWindow()
   updateViewingLatest()
+}
+
+function measureContentTop() {
+  contentTop = logViewport.value?.offsetTop ?? 0
+  return contentTop
+}
+
+// 按当前滚动位置算出要渲染的日志区间。窗口外的高度用占位容器的内边距顶出来，
+// 不能用 transform 位移：transform 不进 offsetTop，这里和锚点恢复的换算都会整段偏掉
+function syncLogWindow() {
+  const element = logList.value
+  let scrollOffset: number
+  let viewportHeight: number
+  if (element) {
+    scrollOffset = element.scrollTop - measureContentTop()
+    viewportHeight = element.clientHeight
+  } else {
+    // 首帧还拿不到滚动容器，按浏览器视口高度先备一屏；追踪最新日志时备的是末尾那一屏
+    viewportHeight = window.innerHeight
+    scrollOffset = isFollowing.value ? Math.max(0, layout.totalHeight() - viewportHeight) : 0
+  }
+  const next = layout.getWindow(scrollOffset, viewportHeight, overscanHeight)
+  const current = logWindow.value
+  if (next.start === current.start && next.end === current.end
+    && next.paddingTop === current.paddingTop && next.paddingBottom === current.paddingBottom) return
+  logWindow.value = next
+}
+
+// 量窗口内各行的真实高度，返回偏移是否需要重算
+function measureRenderedLines() {
+  const viewport = logViewport.value
+  if (!viewport) return false
+  let changed = false
+  for (const line of viewport.querySelectorAll<HTMLElement>('[data-log-key]')) {
+    const key = line.dataset.logKey
+    if (!key) continue
+    if (layout.measure(key, line.getBoundingClientRect().height)) changed = true
+  }
+  return changed
+}
+
+/**
+ * 实测高度会改变占位高度，视口里的内容随之上下移动，因此必须按锚点把位置挪回去。
+ *
+ * 锚点要在改动占位高度之前取，否则读到的已经是移动后的位置；追踪最新日志时不需要锚点，
+ * 直接重新贴到底部即可。
+ */
+async function settleLogWindow(anchor?: PausedLogPosition) {
+  const element = logList.value
+  if (!element) return
+  if (measureRenderedLines()) {
+    syncLogWindow()
+    await nextTick()
+  }
+  if (isFollowing.value && !restoringPosition) {
+    scrollToBottom()
+  } else if (anchor) {
+    restorePausedLogPosition(element, anchor)
+    syncLogWindow()
+  }
+  updateViewingLatest()
+  updateNativeScrollbarWidth()
+}
+
+function scheduleLogWindow() {
+  if (windowFrame) return
+  windowFrame = requestAnimationFrame(async () => {
+    windowFrame = 0
+    const element = logList.value
+    const anchor = element && !isFollowing.value && !restoringPosition
+      ? capturePausedLogPosition(element)
+      : undefined
+    syncLogWindow()
+    await nextTick()
+    await settleLogWindow(anchor)
+  })
+}
+
+/**
+ * 把视口滚回锚点所在的日志。
+ *
+ * 锚点那条日志可能落在渲染窗口之外，此时 DOM 里根本没有它：先按布局偏移粗定位，
+ * 等窗口渲染出来并量过高度，再用锚点的实际位置精调一次。
+ */
+async function restoreLogPosition(anchor?: PausedLogPosition) {
+  const element = logList.value
+  if (!element || !anchor) return
+  restoringPosition = true
+  try {
+    const index = layout.indexOf(anchor.key)
+    if (index >= 0) {
+      element.scrollTop = measureContentTop() + layout.offsetOf(index) - anchor.offset
+      syncLogWindow()
+      await nextTick()
+      measureRenderedLines()
+      syncLogWindow()
+      await nextTick()
+    }
+    restorePausedLogPosition(element, anchor)
+    syncLogWindow()
+    updateViewingLatest()
+  } finally {
+    restoringPosition = false
+  }
 }
 
 function updateViewingLatest() {
@@ -194,7 +340,21 @@ function updateNativeScrollbarWidth() {
   const element = logList.value
   if (!element) return
   nativeScrollbarWidth.value = Math.max(0, element.offsetWidth - element.clientWidth)
-}function setFollowing(value: boolean) {
+}
+
+// 容器宽度一变，之前量到的换行高度全部失效；清空重量，并按锚点保住当前位置
+function handleListResize() {
+  const element = logList.value
+  if (!element) return
+  const width = element.clientWidth
+  if (width !== listWidth) {
+    listWidth = width
+    layout.forgetHeights()
+  }
+  scheduleLogWindow()
+}
+
+function setFollowing(value: boolean) {
   if (isFollowing.value === value) return
   isFollowing.value = value
   if (value) pausedPosition = undefined
@@ -203,7 +363,10 @@ function updateNativeScrollbarWidth() {
 function followLatest() {
   setFollowing(true)
   isViewingLatest.value = true
-  nextTick(() => requestAnimationFrame(scrollToBottom))
+  nextTick(() => requestAnimationFrame(() => {
+    scrollToBottom()
+    scheduleLogWindow()
+  }))
 }
 
 function markViewingLogs() {
@@ -222,17 +385,11 @@ function rememberPausedPosition() {
   if (position) pausedPosition = position
 }
 
-function getVisibleAnchor(element: HTMLElement) {
-  const lines = Array.from(element.querySelectorAll<HTMLElement>('[data-log-index]'))
-  return lines.find(line => line.offsetTop + line.offsetHeight >= element.scrollTop)
-}
-
 async function loadBeforeLogs() {
   const element = logList.value
   if (!element || !props.loadBefore || loadingBefore.value || !hasMoreBefore.value) return
-  const anchor = getVisibleAnchor(element)
-  const anchorIndex = anchor ? Number(anchor.dataset.logIndex) : undefined
-  const anchorOffset = anchor ? anchor.offsetTop - element.scrollTop : 0
+  // 前插会把已加载的日志整体推下去，先记住视口最上方那条，插完再按它把位置挪回来
+  const anchor = capturePausedLogPosition(element)
   const firstLog = props.logs[0]
   markViewingLogs()
   loadingBefore.value = true
@@ -248,21 +405,17 @@ async function loadBeforeLogs() {
     loadCursor.value = page.cursor
     hasMoreBefore.value = page.hasMore
     if (!page.logs.length) return
+    restoringPosition = true
     emit('prepend-logs', page.logs, page.cursor)
     await nextTick()
     await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => {
-        const current = logList.value
-        const currentAnchor = anchorIndex === undefined ? undefined : current?.querySelector<HTMLElement>(`[data-log-index="${anchorIndex + page.logs.length}"]`)
-        if (current && currentAnchor) {
-          current.scrollTop = currentAnchor.offsetTop - anchorOffset
-        }
-        resolve()
-      })
+      requestAnimationFrame(() => resolve())
     })
+    await restoreLogPosition(anchor)
   } catch {
     message.error('加载更早日志失败')
   } finally {
+    restoringPosition = false
     loadingBefore.value = false
   }
 }
@@ -278,7 +431,10 @@ function handleScroll() {
   } else if (isViewingLatest.value) {
     setFollowing(true)
   }
+  // 滚动当帧先按已有高度换出新窗口，避免等到下一帧才补上内容
+  syncLogWindow()
   rememberPausedPosition()
+  scheduleLogWindow()
 }
 
 function getSelectionText() {
@@ -345,9 +501,21 @@ function handleDocumentKeydown(event: KeyboardEvent) {
 }
 
 onMounted(() => {
+  const element = logList.value
+  if (element) {
+    listWidth = element.clientWidth
+    // 估算行高取排版令牌的实测值，不在脚本里另写一份字面字号
+    layout.setEstimatedHeight(Number.parseFloat(getComputedStyle(element).lineHeight) || fallbackLineHeight)
+    if (typeof ResizeObserver !== 'undefined') {
+      listResizeObserver = new ResizeObserver(handleListResize)
+      listResizeObserver.observe(element)
+    }
+  }
   requestAnimationFrame(() => {
+    syncLogWindow()
     scrollToBottom()
     updateNativeScrollbarWidth()
+    scheduleLogWindow()
   })
   document.addEventListener('pointerdown', handleDocumentPointerDown)
   document.addEventListener('keydown', handleDocumentKeydown)
@@ -357,6 +525,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (windowFrame) cancelAnimationFrame(windowFrame)
+  listResizeObserver?.disconnect()
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
   document.removeEventListener('keydown', handleDocumentKeydown)
   window.removeEventListener('resize', closeLogMenu)
@@ -368,8 +538,7 @@ onActivated(() => {
   markViewingLogs()
   if (props.preservePausedPositionOnReturn && !isFollowing.value) {
     nextTick(() => requestAnimationFrame(() => {
-      if (logList.value) restorePausedLogPosition(logList.value, pausedPosition)
-      updateViewingLatest()
+      void restoreLogPosition(pausedPosition)
     }))
     return
   }
@@ -385,14 +554,12 @@ onDeactivated(() => {
   rememberPausedPosition()
 })
 
-watch(() => props.logs.length, async () => {
-  await nextTick()
-  requestAnimationFrame(() => {
-    if (isFollowing.value) scrollToBottom()
-    updateViewingLatest()
-    updateNativeScrollbarWidth()
-  })
-})
+// 日志条数变了就要重排窗口。实时推送是就地追加，数组引用不变，因此长度也要一起侦听
+watch([() => props.logs, () => props.logs.length], () => {
+  layout.setItems(props.logs.map(getLogKey))
+  syncLogWindow()
+  scheduleLogWindow()
+}, { immediate: true })
 
 function isStart(index: number) {
   return index > 0 && props.logs[index - 1].id > props.logs[index].id && props.logs[index].name === 'app'
@@ -550,30 +717,33 @@ function renderContent(record: Logger.Record) {
 
 .log-list {
   box-sizing: border-box;
+  // 虚拟滚动要把布局位置换算成滚动偏移：让滚动容器自己充当 offsetParent，
+  // 占位容器与日志行的 offsetTop 才等于它们在滚动坐标里的位置
+  position: relative;
   height: 100%;
   overflow-y: auto;
   color: var(--terminal-fg);
   background-color: var(--terminal-bg);
   padding: 1rem 1rem;
 
+  // 虚拟滚动的占位容器：窗口之外的日志高度全部折进上下内边距，
+  // 因此容器自身高度始终等于全部日志的高度，原生滚动条与自绘滑块都不必特殊处理
+  .log-viewport {
+    box-sizing: border-box;
+  }
+
+  // 分隔线占的那段留白必须计入行高：虚拟滚动按实测高度累加偏移，
+  // 外边距既不进 offsetHeight 也不进 getBoundingClientRect，会让占位比真实内容矮一截
   .line.start {
-    margin-top: 1rem;
+    padding-top: 1rem;
 
     &::before {
       content: '';
       position: absolute;
       left: 0;
       right: 0;
-      top: -0.5rem;
+      top: 0.5rem;
       border-top: 1px solid var(--terminal-separator);
-    }
-  }
-
-  .line:first-child {
-    margin-top: 0;
-
-    &::before {
-      display: none;
     }
   }
 

@@ -13,9 +13,49 @@ async function readSource(path: string) {
 test('日志行使用时间戳和 id 作为稳定渲染 key', async () => {
   const source = await readSource('../client/logs.vue')
 
-  assert.match(source, /:key="getLogKey\(record\)"/)
-  assert.match(source, /:data-log-key="getLogKey\(record\)"/)
-  assert.match(source, /v-memo="\[getLogKey\(record\), index\]"/)
+  assert.match(source, /:key="item\.key"/)
+  assert.match(source, /:data-log-key="item\.key"/)
+  assert.match(source, /v-memo="\[item\.key, item\.index, item\.start\]"/)
+  assert.match(source, /items\.push\(\{ key: getLogKey\(record\), index, record, start: isStart\(index\) \}\)/)
+})
+
+test('日志列表只渲染窗口内的日志行', async () => {
+  const logsSource = await readSource('../client/logs.vue')
+  const layoutSource = await readSource('../client/virtual-list.ts')
+
+  assert.match(layoutSource, /export function createVirtualListLayout/)
+  assert.match(logsSource, /import\s+\{\s*createVirtualListLayout\s+\}\s+from\s+['"]\.\/virtual-list['"]/)
+  assert.match(logsSource, /v-for="item in visibleLogs"/)
+  assert.match(logsSource, /class="log-viewport"/)
+  assert.match(logsSource, /paddingTop: `\$\{logWindow\.paddingTop\}px`/)
+  assert.match(logsSource, /paddingBottom: `\$\{logWindow\.paddingBottom\}px`/)
+  assert.match(logsSource, /const visibleLogs = computed\(\(\) => \{/)
+  assert.match(logsSource, /layout\.getWindow\(scrollOffset, viewportHeight, overscanHeight\)/)
+  assert.match(logsSource, /layout\.setItems\(props\.logs\.map\(getLogKey\)\)/)
+  // 占位必须走内边距：transform 不进 offsetTop，锚点换算会整段偏掉
+  assert.doesNotMatch(logsSource, /translateY\(\$\{/)
+  assert.match(logsSource, /\.log-list\s*\{[\s\S]*position:\s*relative;/)
+})
+
+test('虚拟滚动的行高按实测值累加，分隔行留白计入行高', async () => {
+  const source = await readSource('../client/logs.vue')
+
+  assert.match(source, /layout\.measure\(key, line\.getBoundingClientRect\(\)\.height\)/)
+  assert.match(source, /listResizeObserver = new ResizeObserver\(handleListResize\)/)
+  assert.match(source, /layout\.forgetHeights\(\)/)
+  assert.match(source, /\.line\.start\s*\{\s*padding-top:\s*1rem;/)
+  assert.doesNotMatch(source, /\.line\.start\s*\{\s*margin-top:/)
+  assert.doesNotMatch(source, /\.line:first-child/)
+})
+
+test('窗口移动后按锚点把视口内容挪回原位', async () => {
+  const source = await readSource('../client/logs.vue')
+
+  assert.match(source, /async function settleLogWindow\(anchor\?: PausedLogPosition\)/)
+  assert.match(source, /async function restoreLogPosition\(anchor\?: PausedLogPosition\)/)
+  assert.match(source, /element\.scrollTop = measureContentTop\(\) \+ layout\.offsetOf\(index\) - anchor\.offset/)
+  assert.match(source, /restorePausedLogPosition\(element, anchor\)/)
+  assert.match(source, /let restoringPosition = false/)
 })
 
 test('没有历史日志时不重复合并实时日志', async () => {
@@ -113,7 +153,7 @@ test('原生滚动条区域用同色遮罩铺平轨道底色', async () => {
 test('报错日志整行标红并给等级标记着色', async () => {
   const source = await readSource('../client/logs.vue')
 
-  assert.match(source, /:class="\['line', `level-\$\{record\.type\}`, \{ start: isStart\(index\) \}\]"/)
+  assert.match(source, /:class="\['line', `level-\$\{item\.record\.type\}`, \{ start: item\.start \}\]"/)
   assert.match(source, /\.line\.level-error\s*\{[\s\S]*background-color:\s*color-mix\(in srgb, #f85149 16%, transparent\);/)
   assert.match(source, /\.line\.level-error\s*\{[\s\S]*&:hover\s*\{[\s\S]*background-color:\s*color-mix\(in srgb, #f85149 26%, transparent\);/)
   assert.match(source, /const levelColors: Record<string, number> = \{[\s\S]*error: 9,/)
@@ -230,7 +270,7 @@ test('滚到顶部后由按钮触发加载更早日志，不再自动预加载',
 test('右键日志行弹出复制候选菜单', async () => {
   const source = await readSource('../client/logs.vue')
 
-  assert.match(source, /@contextmenu\.prevent="openLogMenu\(record, \$event\)"/)
+  assert.match(source, /@contextmenu\.prevent="openLogMenu\(item\.record, \$event\)"/)
   assert.match(source, /<Teleport to="body">/)
   assert.match(source, /class="logger-menu"/)
   assert.match(source, /label: '复制选中文本'/)
