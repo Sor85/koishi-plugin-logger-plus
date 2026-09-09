@@ -90,7 +90,6 @@ const baseConfig = {
   root: 'logs',
   maxAge: 0,
   maxSize: 1024 * 100,
-  showRecentLogsOnStartup: false,
   autoUnloadHistoryLogs: true,
   preservePausedPositionOnReturn: false,
 }

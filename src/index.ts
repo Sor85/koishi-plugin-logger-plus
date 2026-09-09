@@ -103,7 +103,6 @@ export interface Config {
   root?: string
   maxAge?: number
   maxSize?: number
-  showRecentLogsOnStartup?: boolean
   autoUnloadHistoryLogs?: boolean
   preservePausedPositionOnReturn?: boolean
 }
@@ -115,7 +114,6 @@ export const Config: Schema<Config> = Schema.object({
   }).default('data/logs').description('存放输出日志的本地目录'),
   maxAge: Schema.natural().default(30).description('日志文件保存的最大天数'),
   maxSize: Schema.natural().default(1048576).description('单个日志文件的最大大小（字节）。写满即换新文件，值太小会让日志目录里堆出海量小文件'),
-  showRecentLogsOnStartup: Schema.boolean().default(false).description('是否无限加载过往日志。日志加载过多可能影响性能，重启插件即可恢复'),
   autoUnloadHistoryLogs: Schema.boolean().default(true).description('半小时未查看日志后自动卸载已加载的过往日志'),
   preservePausedPositionOnReturn: Schema.boolean().default(false).description('暂停时离开日志页，返回后保持上次暂停位置'),
 })
@@ -184,7 +182,7 @@ export async function apply(ctx: Context, config: Config) {
     const normalized = normalizeLogQuery(query)
     const { cursor, date } = normalized
     const filter = normalizeLogFilter(normalized)
-    if (!cursor && !date && !hasLogFilter(filter) && !config.showRecentLogsOnStartup) return { logs: [], hasMore: false }
+    if (!cursor && !date && !hasLogFilter(filter)) return { logs: [], hasMore: false }
     if (!isValidDate(date)) return { logs: [], hasMore: false }
     const collected: Logger.Record[] = []
     // 关键词和路径清单只需准备一次；放进循环会按记录数重复上万次
@@ -207,7 +205,6 @@ export async function apply(ctx: Context, config: Config) {
   }
 
   async function getLogs() {
-    if (config.showRecentLogsOnStartup) return (await loadLogPage()).logs
     return recentLogs.values()
   }
 
