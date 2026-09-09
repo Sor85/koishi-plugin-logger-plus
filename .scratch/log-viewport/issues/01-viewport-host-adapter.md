@@ -29,7 +29,7 @@ interface ViewportHost {
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] 存在符合上述四方法契约的适配器，且「容器不存在或已离开 DOM」的判断折进 `metrics()` 返回 `undefined`，调用方不再单独判断
 - [ ] `lines()` 一次性满足锚点捕获与锚点恢复两边的需求

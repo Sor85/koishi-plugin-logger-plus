@@ -97,6 +97,7 @@ import type { PausedLogPosition } from './log-position'
 import { capturePausedLogPosition, restorePausedLogPosition } from './log-position'
 import { getLogKey } from './log-record'
 import { vOverlayScrollbar } from './overlay-scrollbar'
+import { asAnchorElement, createDomViewportHost } from './viewport-host'
 import type { VirtualListWindow } from './virtual-list'
 import { createVirtualListLayout } from './virtual-list'
 
@@ -188,8 +189,12 @@ watch(() => props.loadCursor, (cursor) => {
 let lastScrollTop = 0
 let pausedPosition: PausedLogPosition | undefined
 const layout = createVirtualListLayout(fallbackLineHeight)
-// 日志行的 offsetTop 相对滚动容器的内边距盒，占位容器之前还有「查看更多消息」和顶部内边距
-let contentTop = 0
+// 滚动几何一律经由 host 读写：容器是否还连着 DOM 折进 metrics()，调用方不再单独判断
+const host = createDomViewportHost({
+  list: () => logList.value,
+  content: () => logViewport.value,
+  fallbackLineHeight,
+})
 let listWidth = 0
 let windowFrame = 0
 // 恢复滚动位置期间不让逐帧的高度修正插手，避免两处同时改 scrollTop 互相打断
@@ -216,27 +221,36 @@ const showLoadMore = computed(() => Boolean(props.loadBefore) && hasMoreBefore.v
 // 内边距区域本来就没有内容，铺同色底不会遮住日志正文
 const scrollbarGutterWidth = computed(() => `max(1rem, ${nativeScrollbarWidth.value}px)`)
 
-function scrollToBottom() {
-  if (!logList.value) return
-  logList.value.scrollTop = logList.value.scrollHeight
-  syncLogWindow()
-  updateViewingLatest()
+// 记录当前视口内第一条可见日志及其相对偏移；容器已离开 DOM 时不记录
+function capturePosition() {
+  const element = asAnchorElement(host)
+  return element ? capturePausedLogPosition(element) : undefined
 }
 
-function measureContentTop() {
-  contentTop = logViewport.value?.offsetTop ?? 0
-  return contentTop
+// 按锚点把视口内容挪回原处；找不到锚点时保持当前位置不动
+function restorePosition(anchor?: PausedLogPosition) {
+  const element = asAnchorElement(host)
+  return element ? restorePausedLogPosition(element, anchor) : false
+}
+
+function scrollToBottom() {
+  const metrics = host.metrics()
+  if (!metrics) return
+  host.scrollTo(metrics.scrollHeight)
+  syncLogWindow()
+  updateViewingLatest()
 }
 
 // 按当前滚动位置算出要渲染的日志区间。窗口外的高度用占位容器的内边距顶出来，
 // 不能用 transform 位移：transform 不进 offsetTop，这里和锚点恢复的换算都会整段偏掉
 function syncLogWindow() {
-  const element = logList.value
+  const metrics = host.metrics()
   let scrollOffset: number
   let viewportHeight: number
-  if (element) {
-    scrollOffset = element.scrollTop - measureContentTop()
-    viewportHeight = element.clientHeight
+  if (metrics) {
+    // 日志行的偏移相对滚动容器的内边距盒，占位容器之前还有「查看更多消息」和顶部内边距
+    scrollOffset = metrics.scrollTop - metrics.contentTop
+    viewportHeight = metrics.clientHeight
   } else {
     // 首帧还拿不到滚动容器，按浏览器视口高度先备一屏；追踪最新日志时备的是末尾那一屏
     viewportHeight = window.innerHeight
@@ -251,13 +265,9 @@ function syncLogWindow() {
 
 // 量窗口内各行的真实高度，返回偏移是否需要重算
 function measureRenderedLines() {
-  const viewport = logViewport.value
-  if (!viewport) return false
   let changed = false
-  for (const line of viewport.querySelectorAll<HTMLElement>('[data-log-key]')) {
-    const key = line.dataset.logKey
-    if (!key) continue
-    if (layout.measure(key, line.getBoundingClientRect().height)) changed = true
+  for (const line of host.lines()) {
+    if (layout.measure(line.key, line.height)) changed = true
   }
   return changed
 }
@@ -269,8 +279,7 @@ function measureRenderedLines() {
  * 直接重新贴到底部即可。
  */
 async function settleLogWindow(anchor?: PausedLogPosition) {
-  const element = logList.value
-  if (!element) return
+  if (!host.metrics()) return
   if (measureRenderedLines()) {
     syncLogWindow()
     await nextTick()
@@ -278,7 +287,7 @@ async function settleLogWindow(anchor?: PausedLogPosition) {
   if (isFollowing.value && !restoringPosition) {
     scrollToBottom()
   } else if (anchor) {
-    restorePausedLogPosition(element, anchor)
+    restorePosition(anchor)
     syncLogWindow()
   }
   updateViewingLatest()
@@ -289,10 +298,7 @@ function scheduleLogWindow() {
   if (windowFrame) return
   windowFrame = requestAnimationFrame(async () => {
     windowFrame = 0
-    const element = logList.value
-    const anchor = element && !isFollowing.value && !restoringPosition
-      ? capturePausedLogPosition(element)
-      : undefined
+    const anchor = !isFollowing.value && !restoringPosition ? capturePosition() : undefined
     syncLogWindow()
     await nextTick()
     await settleLogWindow(anchor)
@@ -306,20 +312,20 @@ function scheduleLogWindow() {
  * 等窗口渲染出来并量过高度，再用锚点的实际位置精调一次。
  */
 async function restoreLogPosition(anchor?: PausedLogPosition) {
-  const element = logList.value
-  if (!element || !anchor) return
+  const metrics = host.metrics()
+  if (!metrics || !anchor) return
   restoringPosition = true
   try {
     const index = layout.indexOf(anchor.key)
     if (index >= 0) {
-      element.scrollTop = measureContentTop() + layout.offsetOf(index) - anchor.offset
+      host.scrollTo(metrics.contentTop + layout.offsetOf(index) - anchor.offset)
       syncLogWindow()
       await nextTick()
       measureRenderedLines()
       syncLogWindow()
       await nextTick()
     }
-    restorePausedLogPosition(element, anchor)
+    restorePosition(anchor)
     syncLogWindow()
     updateViewingLatest()
   } finally {
@@ -328,10 +334,10 @@ async function restoreLogPosition(anchor?: PausedLogPosition) {
 }
 
 function updateViewingLatest() {
-  const element = logList.value
-  if (!element) return
-  isViewingLatest.value = element.scrollTop + element.clientHeight + 64 >= element.scrollHeight
-  lastScrollTop = element.scrollTop
+  const metrics = host.metrics()
+  if (!metrics) return
+  isViewingLatest.value = metrics.scrollTop + metrics.clientHeight + 64 >= metrics.scrollHeight
+  lastScrollTop = metrics.scrollTop
 }
 
 // 少数浏览器与用户样式会忽略 scrollbar-width / scrollbar-color，仍然给日志列表画出原生滚动条，
@@ -344,9 +350,9 @@ function updateNativeScrollbarWidth() {
 
 // 容器宽度一变，之前量到的换行高度全部失效；清空重量，并按锚点保住当前位置
 function handleListResize() {
-  const element = logList.value
-  if (!element) return
-  const width = element.clientWidth
+  const metrics = host.metrics()
+  if (!metrics) return
+  const width = metrics.clientWidth
   if (width !== listWidth) {
     listWidth = width
     layout.forgetHeights()
@@ -379,17 +385,15 @@ function returnToLatest() {
 }
 
 function rememberPausedPosition() {
-  const element = logList.value
-  if (!props.preservePausedPositionOnReturn || !element || isFollowing.value) return
-  const position = capturePausedLogPosition(element)
+  if (!props.preservePausedPositionOnReturn || isFollowing.value) return
+  const position = capturePosition()
   if (position) pausedPosition = position
 }
 
 async function loadBeforeLogs() {
-  const element = logList.value
-  if (!element || !props.loadBefore || loadingBefore.value || !hasMoreBefore.value) return
+  if (!host.metrics() || !props.loadBefore || loadingBefore.value || !hasMoreBefore.value) return
   // 前插会把已加载的日志整体推下去，先记住视口最上方那条，插完再按它把位置挪回来
-  const anchor = capturePausedLogPosition(element)
+  const anchor = capturePosition()
   const firstLog = props.logs[0]
   markViewingLogs()
   loadingBefore.value = true
@@ -421,12 +425,12 @@ async function loadBeforeLogs() {
 }
 
 function handleScroll() {
-  const element = logList.value
-  if (!element) return
+  const metrics = host.metrics()
+  if (!metrics) return
   const previousScrollTop = lastScrollTop
   updateViewingLatest()
   closeLogMenu()
-  if (element.scrollTop < previousScrollTop) {
+  if (metrics.scrollTop < previousScrollTop) {
     setFollowing(false)
   } else if (isViewingLatest.value) {
     setFollowing(true)
@@ -503,9 +507,9 @@ function handleDocumentKeydown(event: KeyboardEvent) {
 onMounted(() => {
   const element = logList.value
   if (element) {
-    listWidth = element.clientWidth
+    listWidth = host.metrics()?.clientWidth ?? 0
     // 估算行高取排版令牌的实测值，不在脚本里另写一份字面字号
-    layout.setEstimatedHeight(Number.parseFloat(getComputedStyle(element).lineHeight) || fallbackLineHeight)
+    layout.setEstimatedHeight(host.estimatedLineHeight())
     if (typeof ResizeObserver !== 'undefined') {
       listResizeObserver = new ResizeObserver(handleListResize)
       listResizeObserver.observe(element)

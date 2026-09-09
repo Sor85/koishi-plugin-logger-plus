@@ -40,7 +40,7 @@ test('日志列表只渲染窗口内的日志行', async () => {
 test('虚拟滚动的行高按实测值累加，分隔行留白计入行高', async () => {
   const source = await readSource('../client/logs.vue')
 
-  assert.match(source, /layout\.measure\(key, line\.getBoundingClientRect\(\)\.height\)/)
+  assert.match(source, /layout\.measure\(line\.key, line\.height\)/)
   assert.match(source, /listResizeObserver = new ResizeObserver\(handleListResize\)/)
   assert.match(source, /layout\.forgetHeights\(\)/)
   assert.match(source, /\.line\.start\s*\{\s*padding-top:\s*1rem;/)
@@ -53,9 +53,22 @@ test('窗口移动后按锚点把视口内容挪回原位', async () => {
 
   assert.match(source, /async function settleLogWindow\(anchor\?: PausedLogPosition\)/)
   assert.match(source, /async function restoreLogPosition\(anchor\?: PausedLogPosition\)/)
-  assert.match(source, /element\.scrollTop = measureContentTop\(\) \+ layout\.offsetOf\(index\) - anchor\.offset/)
-  assert.match(source, /restorePausedLogPosition\(element, anchor\)/)
+  assert.match(source, /host\.scrollTo\(metrics\.contentTop \+ layout\.offsetOf\(index\) - anchor\.offset\)/)
+  assert.match(source, /restorePosition\(anchor\)/)
   assert.match(source, /let restoringPosition = false/)
+})
+
+test('滚动几何一律经由 ViewportHost 适配器读写', async () => {
+  const logsSource = await readSource('../client/logs.vue')
+  const hostSource = await readSource('../client/viewport-host.ts')
+
+  assert.match(hostSource, /export function createDomViewportHost/)
+  assert.match(hostSource, /if \(!element \|\| !element\.isConnected\) return undefined/)
+  assert.match(logsSource, /import\s+\{\s*asAnchorElement, createDomViewportHost\s+\}\s+from\s+['"]\.\/viewport-host['"]/)
+  // 滚动几何不再直接读写 DOM：容器是否还连着 DOM 折进 metrics()
+  assert.doesNotMatch(logsSource, /logList\.value\.scroll(Top|Height)/)
+  assert.doesNotMatch(logsSource, /element\.scrollTop/)
+  assert.doesNotMatch(logsSource, /querySelectorAll<HTMLElement>\('\[data-log-key\]'\)/)
 })
 
 test('没有历史日志时不重复合并实时日志', async () => {
