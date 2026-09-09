@@ -6,7 +6,7 @@ import { FileWriter } from './file'
 import { createLogRecordHandler } from './record'
 import { RecentLogBuffer } from './recent-log-buffer'
 import { isMissingFileError, LogFileIndex } from './log-file-index'
-import { hasLogFilter, isLogType, LogFilter, matchesLogFilter } from './log-filter'
+import { compileLogFilter, hasLogFilter, isLogType, LogFilter } from './log-filter'
 import { readRecordsBackward } from './log-reader'
 
 const LOG_PAGE_SIZE = 200
@@ -52,7 +52,15 @@ function normalizeLogFilter(query: LogQuery): LogFilter {
     // 等级只接受已知取值，避免前端传来的任意字符串把历史日志全部过滤成空
     type: isLogType(query.type) ? query.type : undefined,
     search: query.search?.trim() || undefined,
+    searchPaths: normalizeSearchPaths(query.searchPaths),
   }
+}
+
+// 关键词命中的插件路径由前端解析后下发，跨过 JSON 边界后可能是任意结构，只取非空字符串
+function normalizeSearchPaths(paths?: readonly string[]) {
+  if (!Array.isArray(paths)) return undefined
+  const normalized = paths.filter(path => typeof path === 'string' && path)
+  return normalized.length ? normalized : undefined
 }
 
 function sortLogs(records: Logger.Record[]) {
@@ -179,10 +187,12 @@ export async function apply(ctx: Context, config: Config) {
     if (!cursor && !date && !hasLogFilter(filter) && !config.showRecentLogsOnStartup) return { logs: [], hasMore: false }
     if (!isValidDate(date)) return { logs: [], hasMore: false }
     const collected: Logger.Record[] = []
+    // 关键词和路径清单只需准备一次；放进循环会按记录数重复上万次
+    const matches = compileLogFilter(filter)
     let hasMore = false
     for await (const record of readSavedRecords(date)) {
       if (!isBeforeCursor(record, cursor)) continue
-      if (!matchesLogFilter(record, filter)) continue
+      if (!matches(record)) continue
       if (collected.length >= LOG_PAGE_SIZE) {
         // 只需要知道「还有更早的」，多读到一条就够，剩下的文件不必再打开
         hasMore = true

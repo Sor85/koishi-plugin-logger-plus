@@ -102,6 +102,7 @@ const props = defineProps<{
   loadPath?: string,
   loadType?: string,
   loadSearch?: string,
+  loadSearchPaths?: string[],
   loadCursor?: string,
 }>()
 
@@ -241,6 +242,7 @@ async function loadBeforeLogs() {
       path: props.loadPath || undefined,
       type: props.loadType || undefined,
       search: props.loadSearch || undefined,
+      searchPaths: props.loadSearchPaths,
       cursor: loadCursor.value ?? (firstLog ? `${firstLog.timestamp}:${firstLog.id}` : undefined),
     }) as LogPage
     loadCursor.value = page.cursor

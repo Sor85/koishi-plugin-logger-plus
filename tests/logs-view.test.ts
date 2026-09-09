@@ -147,19 +147,41 @@ test('过滤胶囊提供日志等级筛选', async () => {
   assert.match(source, /id="logger-filter-level"/)
   assert.match(source, /v-model="selectedType"/)
   assert.match(source, /empty-label="全部等级"/)
-  assert.match(source, /const levelLabels: Record<LogType, string> = \{[\s\S]*debug: '调试',/)
-  assert.match(source, /const levelOptions = logTypes\.map\(type => \(\{ value: type, label: levelLabels\[type\] \}\)\)/)
+  assert.match(source, /const levelOptions = logTypes\.map\(type => \(\{ value: type, label: type \}\)\)/)
+  assert.doesNotMatch(source, /'错误'|'警告'|'信息'|'成功'|'调试'/)
 })
 
 test('等级和关键词条件同时作用于实时日志与历史日志分页', async () => {
   const indexSource = await readSource('../client/index.vue')
   const logsSource = await readSource('../client/logs.vue')
 
-  assert.match(indexSource, /matchesLogFilter\(record, recordFilter\.value\)/)
+  assert.match(indexSource, /const matches = compileLogFilter\(recordFilter\.value\)/)
+  assert.match(indexSource, /logs\.filter\(record => matches\(record\)\)/)
   assert.match(indexSource, /:load-type="selectedType"/)
   assert.match(indexSource, /:load-search="searchKeyword"/)
-  assert.match(indexSource, /watch\(\[selectedDate, selectedPath, selectedType, searchKeyword\]/)
+  assert.match(indexSource, /watch\(\[selectedDate, selectedPath, selectedType, searchKeyword, \(\) => searchPaths\.value\.join\('\\n'\)\]/)
   assert.match(logsSource, /type: props\.loadType \|\| undefined,\s*search: props\.loadSearch \|\| undefined,/)
+})
+
+test('关键词同时覆盖插件名与日志正文', async () => {
+  const indexSource = await readSource('../client/index.vue')
+  const logsSource = await readSource('../client/logs.vue')
+
+  assert.match(indexSource, /const searchPaths = computed\(\(\) => \{/)
+  assert.match(indexSource, /entry\.name\.toLowerCase\(\)\.includes\(keyword\) \|\| entry\.label\?\.toLowerCase\(\)\.includes\(keyword\)/)
+  assert.match(indexSource, /searchPaths: searchPaths\.value,/)
+  assert.match(indexSource, /:load-search-paths="searchPaths"/)
+  assert.match(logsSource, /searchPaths: props\.loadSearchPaths,/)
+})
+
+test('下拉菜单铺平原生滚动条底色并完整显示插件名', async () => {
+  const source = await readSource('../client/option-select.vue')
+
+  assert.match(source, /import\s+\{\s*vOverlayScrollbar\s+\}\s+from\s+['"]\.\/overlay-scrollbar['"]/)
+  assert.match(source, /<div v-if="open" v-overlay-scrollbar class="option-select-content"/)
+  assert.match(source, /\.option-select-content\s*\{[\s\S]*width:\s*max-content;\s*min-width:\s*12rem;/)
+  assert.doesNotMatch(source, /\.option-select-content\s*\{[\s\S]*text-overflow:\s*ellipsis;/)
+  assert.match(source, /span\s*\{\s*white-space:\s*nowrap;\s*\}/)
 })
 
 test('警告日志整行标黄', async () => {

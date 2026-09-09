@@ -66,6 +66,7 @@
       :load-path="selectedPath"
       :load-type="selectedType"
       :load-search="searchKeyword"
+      :load-search-paths="searchPaths"
       :load-cursor="selectedDate ? dateCursor : undefined"
       :preserve-paused-position-on-return="preservePausedPositionOnReturn"
       @prepend-logs="prependLoadedLogs"
@@ -84,8 +85,8 @@ import DatePicker from './date-picker.vue'
 import Logs from './logs.vue'
 import { mergeLogRecords } from './log-record'
 import OptionSelect from './option-select.vue'
-import type { LogType } from '../src/log-filter'
-import { getRecordPaths, hasLogFilter, logTypes, matchesLogFilter } from '../src/log-filter'
+import type { LogFilter } from '../src/log-filter'
+import { compileLogFilter, getRecordPaths, hasLogFilter, logTypes } from '../src/log-filter'
 
 interface LogPage {
   logs: Logger.Record[]
@@ -93,17 +94,16 @@ interface LogPage {
   hasMore: boolean
 }
 
-type PickerName = 'plugin' | 'level' | 'date'
-
-const levelLabels: Record<LogType, string> = {
-  error: '错误',
-  warn: '警告',
-  info: '信息',
-  success: '成功',
-  debug: '调试',
+interface PluginEntry {
+  path: string
+  name: string
+  label?: string
 }
 
-const levelOptions = logTypes.map(type => ({ value: type, label: levelLabels[type] }))
+type PickerName = 'plugin' | 'level' | 'date'
+
+// 等级直接用日志记录里的英文标识，和日志行的 [E]/[W] 标记以及服务端筛选口径保持一致
+const levelOptions = logTypes.map(type => ({ value: type, label: type }))
 
 const selectedPath = ref('')
 const selectedType = ref('')
@@ -124,25 +124,28 @@ let historyUnloadTimer: ReturnType<typeof setTimeout> | undefined
 let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined
 
 function getPluginLabel(path: string) {
-  const entry = findPluginEntry(path, store.config?.plugins)
-  if (!entry) return path
-  return entry.label || entry.name
+  return pluginLabels.value.get(path) || path
 }
 
-function findPluginEntry(path: string, plugins: Record<string, any>): { name: string, label?: string } | undefined {
-  if (!plugins) return
+/**
+ * 收集控制台配置里的全部插件条目。
+ *
+ * 配置项的键形如 `插件名:路径`，路径才是日志记录里 `meta.paths` 的取值，插件名和自定义标签
+ * 只存在于配置中。按路径逐个递归查找会让「解析每条日志的插件名」变成对配置树的重复遍历，
+ * 因此一次性摊平成清单，再派生出路径到显示名的映射。
+ */
+function collectPluginEntries(plugins: Record<string, any>, entries: PluginEntry[] = []) {
+  if (!plugins || typeof plugins !== 'object') return entries
   for (let key in plugins) {
     if (key.startsWith('$')) continue
     const config = plugins[key]
     if (key.startsWith('~')) key = key.slice(1)
     const name = key.split(':', 1)[0]
-    const currentPath = key.includes(':') ? key.slice(name.length + 1) : undefined
-    if (currentPath === path) return { name, label: config?.$label }
-    if (key.startsWith('group:')) {
-      const result = findPluginEntry(path, config)
-      if (result) return result
-    }
+    const path = key.includes(':') ? key.slice(name.length + 1) : undefined
+    if (path) entries.push({ path, name, label: config?.$label })
+    if (key.startsWith('group:')) collectPluginEntries(config, entries)
   }
+  return entries
 }
 
 function findLoggerPlusConfig(plugins: Record<string, any>): {
@@ -163,6 +166,16 @@ function findLoggerPlusConfig(plugins: Record<string, any>): {
   }
 }
 
+const pluginEntries = computed(() => collectPluginEntries(store.config?.plugins))
+
+const pluginLabels = computed(() => {
+  const labels = new Map<string, string>()
+  for (const entry of pluginEntries.value) {
+    labels.set(entry.path, entry.label || entry.name)
+  }
+  return labels
+})
+
 const pluginOptions = computed(() => {
   const paths = new Set<string>()
   for (const record of [...historyLogs.value, ...(store.logs ?? []), ...dateLogs.value]) {
@@ -175,10 +188,26 @@ const pluginOptions = computed(() => {
     .sort((left, right) => left.label.localeCompare(right.label))
 })
 
-const recordFilter = computed(() => ({
+/**
+ * 关键词命中的插件路径。
+ *
+ * 搜索要同时覆盖插件名与日志正文，而日志记录里只有插件路径；插件名先在配置里比一遍，
+ * 命中的路径随查询一起下发，服务端读历史日志时按同一份清单判断。
+ * 清单只跟关键词和配置有关，与日志条数无关，因此不会随日志量增长而变慢。
+ */
+const searchPaths = computed(() => {
+  const keyword = searchKeyword.value.toLowerCase()
+  if (!keyword) return [] as string[]
+  return pluginEntries.value
+    .filter(entry => entry.name.toLowerCase().includes(keyword) || entry.label?.toLowerCase().includes(keyword))
+    .map(entry => entry.path)
+})
+
+const recordFilter = computed<LogFilter>(() => ({
   path: selectedPath.value || undefined,
   type: selectedType.value || undefined,
   search: searchKeyword.value || undefined,
+  searchPaths: searchPaths.value,
 }))
 
 const liveLogs = computed(() => {
@@ -186,7 +215,9 @@ const liveLogs = computed(() => {
     ? mergeLogRecords(historyLogs.value, store.logs ?? [])
     : store.logs ?? []
   if (!hasLogFilter(recordFilter.value)) return logs
-  return logs.filter(record => matchesLogFilter(record, recordFilter.value))
+  // 实时日志每 100ms 推送一次就要把整份已加载日志重过一遍，判定函数必须在循环外编译好
+  const matches = compileLogFilter(recordFilter.value)
+  return logs.filter(record => matches(record))
 })
 
 const filteredLogs = computed(() => selectedDate.value ? dateLogs.value : liveLogs.value)
@@ -294,7 +325,9 @@ watch(searchInput, () => {
   searchDebounceTimer = setTimeout(applySearchKeyword, searchDebounceDelay)
 })
 
-watch([selectedDate, selectedPath, selectedType, searchKeyword], async ([date, path, type, search]) => {
+// 插件名命中的路径清单随配置变化，取拼接结果当侦听源：配置每次推送都会重算出新数组，
+// 只按引用比较会让同一份清单反复触发历史日志查询
+watch([selectedDate, selectedPath, selectedType, searchKeyword, () => searchPaths.value.join('\n')], async ([date, path, type, search]) => {
   if (date || path || type || search) isFilterExpanded.value = true
   const requestId = ++dateRequestId
   dateLogs.value = []
@@ -309,6 +342,7 @@ watch([selectedDate, selectedPath, selectedType, searchKeyword], async ([date, p
     path: path || undefined,
     type: type || undefined,
     search: search || undefined,
+    searchPaths: searchPaths.value,
   }) as LogPage
   if (requestId !== dateRequestId) return
   if (date) {

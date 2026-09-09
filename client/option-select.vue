@@ -16,7 +16,7 @@
         <path d="m7 10 5 5 5-5"/>
       </svg>
     </button>
-    <div v-if="open" class="option-select-content" role="listbox">
+    <div v-if="open" v-overlay-scrollbar class="option-select-content" role="listbox">
       <button
         v-for="option in allOptions"
         :key="option.value"
@@ -37,6 +37,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { vOverlayScrollbar } from './overlay-scrollbar'
 
 const props = defineProps<{
   id: string
@@ -114,12 +115,15 @@ function select(value: string) {
   }
 }
 
+// 下拉列表用 overlay 自绘滚动条：原生轨道底色比菜单更深，会在菜单右侧留下一条竖带。
+// 宽度按内容撑开，插件名不再截断，因此也不能再靠滚动条占位挤压文字。
 .option-select-content {
   position: absolute;
   top: calc(100% + 0.4rem);
   left: 0;
   z-index: 3;
-  width: 12rem;
+  width: max-content;
+  min-width: 12rem;
   max-height: 14rem;
   overflow-y: auto;
   color: var(--terminal-fg);
@@ -134,12 +138,12 @@ function select(value: string) {
     align-items: center;
     gap: 0.45rem;
     width: 100%;
-    overflow: hidden;
     color: inherit;
     background: transparent;
     border: 0;
     border-radius: 0.4rem;
-    padding: 0.35rem 0.5rem;
+    // 右侧留出自绘滑块的宽度，滑块不会压在插件名末尾
+    padding: 0.35rem 0.75rem 0.35rem 0.5rem;
     font: inherit;
     font-size: 0.8rem;
     line-height: 1.15rem;
@@ -171,8 +175,6 @@ function select(value: string) {
     }
 
     span {
-      overflow: hidden;
-      text-overflow: ellipsis;
       white-space: nowrap;
     }
   }
