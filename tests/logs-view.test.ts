@@ -58,7 +58,7 @@ test('窗口移动后按锚点把视口内容挪回原位', async () => {
 
   assert.match(source, /async function settle\(anchor\?: LogAnchor\)/)
   assert.match(source, /async function restore\(anchor\?: LogAnchor\)/)
-  assert.match(source, /scrollTo\(metrics\.contentTop \+ layout\.offsetOf\(index\) - anchor\.offset\)/)
+  assert.match(source, /metrics\.contentTop \+ layout\.offsetOf\(index\) - anchor\.offset/)
   assert.match(source, /restoreAnchor\(anchor\)/)
   assert.match(source, /let writers = 0/)
 })

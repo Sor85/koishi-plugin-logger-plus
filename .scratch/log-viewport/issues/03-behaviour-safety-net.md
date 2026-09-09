@@ -8,7 +8,7 @@
 
 **Blocked by:** 02 — 把视口编排搬进 LogViewport 核心
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] 假 host 是字面量对象，实现 `ViewportHost` 四方法；帧由测试手动推进，不等待真实帧调度
 - [ ] **追踪时追加日志** → 滚动位置等于「总高度减视口高度」

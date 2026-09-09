@@ -125,12 +125,12 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
 
   // 按当前滚动位置算出要渲染的日志区间。窗口吃的是内容坐标而非滚动位置：
   // 占位容器之前还有「查看更多消息」和顶部内边距，先减掉再交给布局换算
-  function syncWindow() {
+  function syncWindow(overrideOffset?: number) {
     const metrics = host.metrics()
     let scrollOffset: number
     let viewportHeight: number
     if (metrics) {
-      scrollOffset = metrics.scrollTop - metrics.contentTop
+      scrollOffset = overrideOffset ?? metrics.scrollTop - metrics.contentTop
       viewportHeight = metrics.clientHeight
     } else {
       // 首帧还拿不到滚动容器，先备一屏；追踪最新日志时备的是末尾那一屏
@@ -226,9 +226,13 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
   /**
    * 把视口滚回锚点所在的日志。
    *
-   * 锚点那条日志可能落在渲染窗口之外，此时 DOM 里根本没有它：先按布局偏移粗定位，
-   * 等窗口渲染出来并量过高度，再用锚点的实际位置精调一次。
+   * 锚点那条日志可能落在渲染窗口之外，此时 DOM 里根本没有它，只能按布局偏移换算位置；
+   * 而未量过的行按估算值顶位，算出来的偏移必然是错的。因此先把窗口换到目标附近、
+   * 量过高度再重算，反复逼近，**整个过程不写滚动位置**：写一次就是用户看得见的一次跳动，
+   * 「先跳到一处再弹到另一处」正是这么来的。收敛之后只落一次。
    */
+  const restoreRounds = 3
+
   async function restore(anchor?: LogAnchor) {
     const metrics = host.metrics()
     if (!metrics || !anchor) return
@@ -236,15 +240,19 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
     try {
       const index = layout.indexOf(anchor.key)
       if (index >= 0) {
-        scrollTo(metrics.contentTop + layout.offsetOf(index) - anchor.offset)
-        syncWindow()
-        publish()
-        await flush()
-        measureLines()
-        syncWindow()
-        publish()
-        await flush()
+        let target = metrics.contentTop + layout.offsetOf(index) - anchor.offset
+        for (let round = 0; round < restoreRounds; round++) {
+          syncWindow(target - metrics.contentTop)
+          publish()
+          await flush()
+          if (!measureLines()) break
+          const next = metrics.contentTop + layout.offsetOf(index) - anchor.offset
+          if (next === target) break
+          target = next
+        }
+        scrollTo(target)
       }
+      // 兜底：清单里没有这条日志时按渲染出来的行精调；两者都找不到就保持当前位置
       restoreAnchor(anchor)
       syncWindow()
       updateViewingLatest()
@@ -281,12 +289,20 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
     handleResize() {
       const metrics = host.metrics()
       if (!metrics) return
+      layout.setEstimatedHeight(host.estimatedLineHeight())
       // 不变量 4：宽度一变换行结果全部失效，清空重量；高度变化不清
       if (metrics.clientWidth !== listWidth) {
         listWidth = metrics.clientWidth
+        // 不变量 2：丢弃实测高度会让占位整段回落到估算值，锚点必须在此之前取。
+        // 回落之后滚动位置指向的内容坐标已经变了，锚点那条日志往往连渲染窗口都出不来，
+        // 因此走完整的两阶段恢复，而不是指望逐帧的高度修正把它找回来
+        const anchor = isFollowing ? undefined : captureAnchor()
         layout.forgetHeights()
+        if (anchor) {
+          void restore(anchor).then(scheduleWindow)
+          return
+        }
       }
-      layout.setEstimatedHeight(host.estimatedLineHeight())
       scheduleWindow()
     },
     followLatest() {
