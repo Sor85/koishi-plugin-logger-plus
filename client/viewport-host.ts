@@ -108,6 +108,8 @@ export function asAnchorElement(host: ViewportHost): HTMLElement | undefined {
       return host.metrics()?.scrollTop ?? metrics.scrollTop
     },
     set scrollTop(value: number) {
+      // 位置没变就不下发：修正量为零时不该记成一次滚动写入
+      if (host.metrics()?.scrollTop === value) return
       host.scrollTo(value)
     },
     getBoundingClientRect: () => ({ top: 0 }),

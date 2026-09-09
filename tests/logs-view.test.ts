@@ -22,16 +22,19 @@ test('日志行使用时间戳和 id 作为稳定渲染 key', async () => {
 test('日志列表只渲染窗口内的日志行', async () => {
   const logsSource = await readSource('../client/logs.vue')
   const layoutSource = await readSource('../client/virtual-list.ts')
+  const coreSource = await readSource('../client/log-viewport.ts')
 
   assert.match(layoutSource, /export function createVirtualListLayout/)
-  assert.match(logsSource, /import\s+\{\s*createVirtualListLayout\s+\}\s+from\s+['"]\.\/virtual-list['"]/)
+  // 虚拟列表布局只被协调核心引用，不再对日志列表暴露
+  assert.match(coreSource, /import\s+\{\s*createVirtualListLayout\s+\}\s+from\s+['"]\.\/virtual-list['"]/)
+  assert.doesNotMatch(logsSource, /virtual-list/)
   assert.match(logsSource, /v-for="item in visibleLogs"/)
   assert.match(logsSource, /class="log-viewport"/)
   assert.match(logsSource, /paddingTop: `\$\{logWindow\.paddingTop\}px`/)
   assert.match(logsSource, /paddingBottom: `\$\{logWindow\.paddingBottom\}px`/)
   assert.match(logsSource, /const visibleLogs = computed\(\(\) => \{/)
-  assert.match(logsSource, /layout\.getWindow\(scrollOffset, viewportHeight, overscanHeight\)/)
-  assert.match(logsSource, /layout\.setItems\(props\.logs\.map\(getLogKey\)\)/)
+  assert.match(coreSource, /layout\.getWindow\(scrollOffset, viewportHeight, options\.overscan\)/)
+  assert.match(logsSource, /viewport\.setItems\(props\.logs\.map\(getLogKey\)\)/)
   // 占位必须走内边距：transform 不进 offsetTop，锚点换算会整段偏掉
   assert.doesNotMatch(logsSource, /translateY\(\$\{/)
   assert.match(logsSource, /\.log-list\s*\{[\s\S]*position:\s*relative;/)
@@ -39,36 +42,57 @@ test('日志列表只渲染窗口内的日志行', async () => {
 
 test('虚拟滚动的行高按实测值累加，分隔行留白计入行高', async () => {
   const source = await readSource('../client/logs.vue')
+  const coreSource = await readSource('../client/log-viewport.ts')
+  const shellSource = await readSource('../client/use-log-viewport.ts')
 
-  assert.match(source, /layout\.measure\(line\.key, line\.height\)/)
-  assert.match(source, /listResizeObserver = new ResizeObserver\(handleListResize\)/)
-  assert.match(source, /layout\.forgetHeights\(\)/)
+  assert.match(coreSource, /layout\.measure\(line\.key, line\.height\)/)
+  assert.match(shellSource, /observer = new ResizeObserver\(\(\) => viewport\.handleResize\(\)\)/)
+  assert.match(coreSource, /layout\.forgetHeights\(\)/)
   assert.match(source, /\.line\.start\s*\{\s*padding-top:\s*1rem;/)
   assert.doesNotMatch(source, /\.line\.start\s*\{\s*margin-top:/)
   assert.doesNotMatch(source, /\.line:first-child/)
 })
 
 test('窗口移动后按锚点把视口内容挪回原位', async () => {
-  const source = await readSource('../client/logs.vue')
+  const source = await readSource('../client/log-viewport.ts')
 
-  assert.match(source, /async function settleLogWindow\(anchor\?: PausedLogPosition\)/)
-  assert.match(source, /async function restoreLogPosition\(anchor\?: PausedLogPosition\)/)
-  assert.match(source, /host\.scrollTo\(metrics\.contentTop \+ layout\.offsetOf\(index\) - anchor\.offset\)/)
-  assert.match(source, /restorePosition\(anchor\)/)
-  assert.match(source, /let restoringPosition = false/)
+  assert.match(source, /async function settle\(anchor\?: LogAnchor\)/)
+  assert.match(source, /async function restore\(anchor\?: LogAnchor\)/)
+  assert.match(source, /scrollTo\(metrics\.contentTop \+ layout\.offsetOf\(index\) - anchor\.offset\)/)
+  assert.match(source, /restoreAnchor\(anchor\)/)
+  assert.match(source, /let writers = 0/)
 })
 
 test('滚动几何一律经由 ViewportHost 适配器读写', async () => {
   const logsSource = await readSource('../client/logs.vue')
+  const coreSource = await readSource('../client/log-viewport.ts')
   const hostSource = await readSource('../client/viewport-host.ts')
 
   assert.match(hostSource, /export function createDomViewportHost/)
   assert.match(hostSource, /if \(!element \|\| !element\.isConnected\) return undefined/)
-  assert.match(logsSource, /import\s+\{\s*asAnchorElement, createDomViewportHost\s+\}\s+from\s+['"]\.\/viewport-host['"]/)
-  // 滚动几何不再直接读写 DOM：容器是否还连着 DOM 折进 metrics()
+  assert.match(coreSource, /import type \{ ViewportHost \} from '\.\/viewport-host'/)
+  // 核心不引入 Vue：这条边界由 import 关系直接可验证，不靠纪律
+  assert.doesNotMatch(coreSource, /from 'vue'/)
+  // 日志列表不再自己读写滚动几何
   assert.doesNotMatch(logsSource, /logList\.value\.scroll(Top|Height)/)
   assert.doesNotMatch(logsSource, /element\.scrollTop/)
   assert.doesNotMatch(logsSource, /querySelectorAll<HTMLElement>\('\[data-log-key\]'\)/)
+})
+
+test('视口协调经由 LogViewport 的八个动作，窗口与追踪状态从回调流出', async () => {
+  const logsSource = await readSource('../client/logs.vue')
+  const coreSource = await readSource('../client/log-viewport.ts')
+  const shellSource = await readSource('../client/use-log-viewport.ts')
+
+  for (const action of ['setItems', 'handleScroll', 'handleResize', 'followLatest', 'around', 'capture', 'restore', 'dispose']) {
+    assert.match(coreSource, new RegExp(`\\b${action}\\b`), `LogViewport 缺少动作 ${action}`)
+  }
+  // 虚拟列表的缓存条数只服务于守卫测试，不出现在对外形状上
+  assert.doesNotMatch(coreSource, /measuredSize/)
+  assert.match(shellSource, /schedule\(task\) \{[\s\S]*requestAnimationFrame\(task\)/)
+  assert.match(shellSource, /flush: \(\) => nextTick\(\)/)
+  assert.match(logsSource, /await viewport\.around\(async \(\) => \{/)
+  assert.match(logsSource, /const \{ viewport, logWindow, isFollowing, isViewingLatest \} = useLogViewport\(\{/)
 })
 
 test('没有历史日志时不重复合并实时日志', async () => {
@@ -178,7 +202,7 @@ test('离开底部时提供回到底部按钮', async () => {
 
   assert.match(source, /:class="\['logger-scroll-bottom', \{ visible: !isViewingLatest \}\]"/)
   assert.match(source, /@click="returnToLatest"/)
-  assert.match(source, /function returnToLatest\(\) \{\s*markViewingLogs\(\)\s*followLatest\(\)\s*\}/)
+  assert.match(source, /function returnToLatest\(\) \{\s*markViewingLogs\(\)\s*viewport\.followLatest\(\)\s*\}/)
   assert.match(source, /\.logger-scroll-bottom\s*\{[\s\S]*pointer-events:\s*none;/)
   assert.match(source, /\.logger-scroll-bottom\s*\{[\s\S]*&\.visible\s*\{[\s\S]*pointer-events:\s*auto;/)
 })

@@ -25,7 +25,7 @@ interface LogViewport {
 
 **Blocked by:** 01 — 把滚动容器的 DOM 读写收进 ViewportHost adapter
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] 核心不引入 Vue —— 这条边界由 import 关系直接可验证，不靠纪律
 - [ ] `schedule`、`flush`、`onStateChange` 作为构造参数由 composable 注入；核心不直接调用全局的帧调度
