@@ -30,6 +30,8 @@ test('日志列表只渲染窗口内的日志行', async () => {
   assert.doesNotMatch(logsSource, /translateY\(\$\{/)
   // 滚动容器要自己充当 offsetParent，日志行的 offsetTop 才等于它在滚动坐标里的位置
   assert.match(logsSource, /\.log-list\s*\{[\s\S]*position:\s*relative;/)
+  // 浏览器原生锚定不能成为第二个位置写者，Firefox 的宽度重排验收覆盖实际行为。
+  assert.match(logsSource, /\.log-list\s*\{[^}]*overflow-anchor:\s*none;/)
 })
 
 test('分隔行的留白用内边距，计入行高', async () => {

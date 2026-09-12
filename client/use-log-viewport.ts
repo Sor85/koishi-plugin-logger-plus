@@ -53,6 +53,7 @@ export function useLogViewport(options: UseLogViewportOptions) {
   })
 
   let observer: ResizeObserver | undefined
+  let mountFrame: number | undefined
 
   onMounted(() => {
     const element = options.list.value
@@ -61,10 +62,14 @@ export function useLogViewport(options: UseLogViewportOptions) {
       observer.observe(element)
     }
     // 没有 ResizeObserver 时也要走一次首帧：量估算行高、贴底、备好第一屏
-    requestAnimationFrame(() => viewport.handleResize())
+    mountFrame = requestAnimationFrame(() => {
+      mountFrame = undefined
+      viewport.handleResize()
+    })
   })
 
   onUnmounted(() => {
+    if (mountFrame !== undefined) cancelAnimationFrame(mountFrame)
     observer?.disconnect()
     observer = undefined
     viewport.dispose()
