@@ -54,13 +54,33 @@ async page => {
     await state.viewport.restore(saved)
     await wait()
     check('窗口外恢复', offset(saved.key), saved.offset)
+    let release
+    const loading = new Promise(resolve => { release = resolve })
+    const operation = state.viewport.around(async () => {
+      await loading
+      component.props.logs = component.props.logs.concat([record(1040)])
+    })
+    state.viewport.followLatest()
+    await wait()
+    check('加载期间立即回底', list.scrollHeight - list.clientHeight - list.scrollTop, 0)
+    release()
+    await operation
+    await wait()
+    check('加载结束仍贴底', list.scrollHeight - list.clientHeight - list.scrollTop, 0)
+    list.scrollTop -= 1600
+    await wait()
     window.viewportFixture = { component, wait, anchor, offset, check, resizeBefore: anchor() }
+    const resizeLoading = new Promise(resolve => { window.viewportFixture.releaseResize = resolve })
+    window.viewportFixture.resizeOperation = state.viewport.around(() => resizeLoading)
   })
   await page.setViewportSize({ width: 820, height: 720 })
   await page.evaluate(async () => {
-    const { component, wait, anchor, offset, check, resizeBefore } = window.viewportFixture
+    const { component, wait, anchor, offset, check, resizeBefore, releaseResize, resizeOperation } = window.viewportFixture
     await wait()
-    check('缩窄窗口保位', offset(resizeBefore.key), resizeBefore.top)
+    releaseResize()
+    await resizeOperation
+    await wait()
+    check('加载期间缩窄窗口保位', offset(resizeBefore.key), resizeBefore.top)
     component.props.preservePausedPositionOnReturn = true
     const before = anchor()
     await component.setupState.router.push('/plugins/')

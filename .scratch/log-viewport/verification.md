@@ -14,8 +14,8 @@
 
 | 命令 | 结果 |
 | --- | --- |
-| `yarn test` | 107/107 通过，包含 19 条 LogViewport 行为测试 |
-| `node --import tsx --test tests/log-viewport.test.ts` | 19/19 通过 |
+| `yarn test` | 113/113 通过，包含 25 条 LogViewport 行为测试 |
+| `node --import tsx --test tests/log-viewport.test.ts` | 25/25 通过 |
 | `yarn build` | 服务端类型生成、tsup、Vite 均通过 |
 | `yarn exec tsc --noEmit --target es2022 --module esnext --moduleResolution bundler --skipLibCheck --strict --esModuleInterop client/log-viewport.ts client/viewport-host.ts client/use-log-viewport.ts tests/log-viewport.test.ts` | 通过 |
 | `yarn exec tsc --noEmit -p tsconfig.client.json` | 未通过：依赖 `@koishijs/client/client/plugins/loader.ts:56` 的 `ShallowReactiveBrandClass` 与 `Dict<LoadResult>` 不兼容 |
@@ -26,7 +26,7 @@
 
 ### 有效性检查
 
-在独立临时目录执行变异，不改动运行环境加载的源码：
+首轮 19 条测试在独立临时目录执行变异，不改动运行环境加载的源码：
 
 - 基线：19 条全部通过。
 - 禁用单写者闸门：异步前插期间抢写测试失败。
@@ -73,6 +73,16 @@ Firefox 使用另一会话名与 `--browser=firefox` 重复执行。脚本向真
 4. 先渲染并测量末尾窗口，再贴底；避免窗口高度短暂收缩引发浏览器钳制，继而被误判为用户上滚。
 5. 恢复最后一轮测量后先提交占位，再只按实际矩形写一次；宽度改变时优先使用重排前的稳定阅读锚点。
 6. Firefox 原生滚动锚定曾使宽度变化后偏移从 −16px 变成 −176px。日志容器使用 `overflow-anchor: none` 后双浏览器通过，CSS 守卫保留此边界。
+
+### 复审补充：挂起动作与用户优先级
+
+复审确认闸门不能只丢弃待执行帧。新增 6 条回归并修复：
+
+- `windowPending` 保留待处理请求，最后一个 writer 释放后补调度，包括无锚点首次加载、异步变更失败期间的实时追加。
+- 用户的新滚动锚点优先于旧事务锚点；显式回底提升代次，使旧恢复失效并立即执行贴底，不必等网络结束。
+- 调宽只更新布局，不在前插期间另起恢复写者；成功时合并到当前恢复，失败时由 `resizePending` 补做保位。
+
+Chrome 与 Firefox 复跑扩展脚本均通过：加载尚未结束时显式回底距离 0px、加载结束仍为 0px；加载期间宽度从 1280 改为 820 后锚点 −36px → −36px，随后跨页返回仍为 −36px。既有 −16px 基础场景、十万条 66 DOM 行及拖动验证继续通过。
 
 ## 流程偏差
 

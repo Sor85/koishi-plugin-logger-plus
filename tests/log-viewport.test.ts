@@ -324,6 +324,120 @@ test('宽度改变后窗口外旧实测高度也回落估算，不残留旧换�
   assert.equal(harness.topOf(before.key), before.top)
 })
 
+test('加载期间回到底部的意图在闸门释放后不会丢失', async () => {
+  const harness = createHarness({ keys: keysOf(100) })
+  await harness.mount()
+  harness.setScrollTop(300)
+  harness.viewport.handleScroll()
+  await harness.advance(2)
+  let release!: () => void
+  const wait = new Promise<void>(resolve => { release = resolve })
+  const operation = harness.viewport.around(async () => {
+    await wait
+    harness.setItems(keysOf(120))
+  })
+  harness.viewport.followLatest()
+  await harness.advance(2)
+  const immediateTop = harness.scrollTop()
+  const immediateBottom = harness.scrollHeight() - 200
+  release()
+  await harness.run(operation)
+  assert.equal(immediateTop, immediateBottom)
+  assert.equal(harness.state().isFollowing, true)
+  assert.equal(harness.scrollTop(), harness.scrollHeight() - 200)
+})
+
+test('等待历史日志期间的新阅读位置取代旧锚点，前插后仍保持新位置', async () => {
+  const harness = createHarness({ keys: keysOf(200, 100) })
+  await harness.mount()
+  harness.setScrollTop(300)
+  harness.viewport.handleScroll()
+  await harness.advance(2)
+  let release!: () => void
+  const wait = new Promise<void>(resolve => { release = resolve })
+  const operation = harness.viewport.around(async () => {
+    await wait
+    harness.setItems([...keysOf(20, 80), ...harness.keys()])
+  })
+  harness.setScrollTop(1000)
+  harness.viewport.handleScroll()
+  await harness.advance(2)
+  const latest = harness.firstVisible()!
+  release()
+  await harness.run(operation)
+  assert.equal(harness.topOf(latest.key), latest.top)
+  assert.equal(harness.state().isFollowing, false)
+})
+
+test('前插等待期间调宽只更新布局，不另起滚动写者', async () => {
+  const harness = createHarness({ keys: keysOf(200, 100), height: (_key, width) => width < 500 ? 60 : 20 })
+  await harness.mount()
+  harness.setScrollTop(1000)
+  harness.viewport.handleScroll()
+  await harness.advance(2)
+  const before = harness.firstVisible()!
+  let release!: () => void
+  const wait = new Promise<void>(resolve => { release = resolve })
+  const operation = harness.viewport.around(async () => {
+    await wait
+    harness.setItems([...keysOf(20, 80), ...harness.keys()])
+  })
+  harness.resetScrollCalls()
+  harness.setWidth(400)
+  harness.viewport.handleResize()
+  await harness.advance(2)
+  const intermediate = harness.scrollCalls()
+  release()
+  await harness.run(operation)
+  assert.equal(intermediate, 0)
+  assert.equal(harness.topOf(before.key), before.top)
+  assert.equal(harness.scrollCalls(), 1)
+})
+
+test('空列表通过 around 首次加载后仍会测量并贴底', async () => {
+  const harness = createHarness({ keys: [], height: () => 60 })
+  await harness.mount()
+  await harness.run(harness.viewport.around(() => { harness.setItems(keysOf(100)) }))
+  assert.equal(harness.scrollTop(), harness.scrollHeight() - 200)
+  assert.equal(harness.state().isViewingLatest, true)
+})
+
+test('闸门期间追加后变更失败，也会补做追踪而不依赖下一条日志', async () => {
+  const harness = createHarness({ keys: keysOf(100) })
+  await harness.mount()
+  let fail!: () => void
+  const pending = new Promise<void>((_resolve, reject) => { fail = () => reject(new Error('读取失败')) })
+  const operation = harness.viewport.around(() => pending)
+  const rejection = assert.rejects(operation, /读取失败/)
+  harness.setItems(keysOf(120))
+  await harness.advance(2)
+  fail()
+  await rejection
+  await harness.advance(3)
+  assert.equal(harness.scrollTop(), harness.scrollHeight() - 200)
+  assert.equal(harness.state().isViewingLatest, true)
+})
+
+test('等待期间调宽后加载失败，仍补做调宽保位', async () => {
+  const harness = createHarness({ keys: keysOf(200), height: (_key, width) => width < 500 ? 60 : 20 })
+  await harness.mount()
+  harness.setScrollTop(1000)
+  harness.viewport.handleScroll()
+  await harness.advance(2)
+  const before = harness.firstVisible()!
+  let fail!: () => void
+  const pending = new Promise<void>((_resolve, reject) => { fail = () => reject(new Error('读取失败')) })
+  const operation = harness.viewport.around(() => pending)
+  const rejection = assert.rejects(operation, /读取失败/)
+  harness.setWidth(400)
+  harness.viewport.handleResize()
+  await harness.advance(2)
+  fail()
+  await rejection
+  await harness.advance(4)
+  assert.equal(harness.topOf(before.key), before.top)
+})
+
 function keysOf(count: number, offset = 0) {
   return Array.from({ length: count }, (_, index) => `${index + offset}`)
 }

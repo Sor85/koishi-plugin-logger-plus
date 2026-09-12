@@ -87,6 +87,8 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
   let listWidth = 0
   let pausedAnchor: LogAnchor | undefined
   let cancelFrame: (() => void) | undefined
+  let windowPending = false
+  let resizePending = false
   let disposed = false
   const pendingFrames = new Set<() => void>()
   // 不变量 1：单写者闸门。大于零表示正有一处在按锚点改滚动位置，
@@ -97,6 +99,11 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
 
   function isRestoring() {
     return writers > 0
+  }
+
+  function releaseWriter() {
+    writers--
+    if (!isRestoring() && windowPending) scheduleWindow()
   }
 
   // 状态去重：窗口四字段与两项追踪状态全等就不再往外抛，
@@ -169,24 +176,27 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
     lastScrollTop = metrics.scrollTop
   }
 
-  async function scrollToBottom(frameRevision = revision) {
+  async function scrollToBottom(frameRevision = revision, userRequested = false) {
+    // 显式回底已递增代次，旧恢复失去写入权；不必等待网络请求结束才执行用户动作。
+    // 自动贴底仍受闸门约束，二者在每次 await 后都必须持有当前代次。
+    const superseded = () => disposed || frameRevision !== revision || (!userRequested && isRestoring())
     // 先渲染并测量末尾窗口，再写入最终位置。先滚后换窗会让 DOM 总高度短暂收缩，
     // 浏览器钳制 scrollTop 后发出的 scroll 曾被误判成用户上滚，导致追踪自动暂停。
     for (let round = 0; round < 3; round++) {
       const metrics = host.metrics()
-      if (disposed || isRestoring() || frameRevision !== revision || !metrics) return
+      if (superseded() || !metrics) return
       syncWindow(Math.max(0, layout.totalHeight() - metrics.clientHeight))
       publish()
       await flush()
-      if (disposed || isRestoring() || frameRevision !== revision || !host.metrics()) return
+      if (superseded() || !host.metrics()) return
       if (!measureLines()) break
     }
     const metrics = host.metrics()
-    if (disposed || isRestoring() || frameRevision !== revision || !metrics) return
+    if (superseded() || !metrics) return
     syncWindow(Math.max(0, layout.totalHeight() - metrics.clientHeight))
     publish()
     await flush()
-    if (disposed || isRestoring() || frameRevision !== revision) return
+    if (superseded()) return
     const current = host.metrics()
     if (!current) return
     scrollTo(Math.max(0, current.scrollHeight - current.clientHeight))
@@ -242,10 +252,21 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
   }
 
   function scheduleWindow() {
-    if (cancelFrame || disposed) return
+    if (disposed) return
+    // 挂起不等于丢弃：帧请求保留到最后一个 writer 释放后，不能靠下一条日志唤醒。
+    windowPending = true
+    if (cancelFrame || isRestoring()) return
     cancelFrame = scheduleFrame(async () => {
       cancelFrame = undefined
       if (disposed || isRestoring()) return
+      windowPending = false
+      if (resizePending) {
+        resizePending = false
+        if (!isFollowing && pausedAnchor) {
+          await restore(pausedAnchor)
+          return
+        }
+      }
       const frameRevision = revision
       // 不变量 1：恢复位置期间不取锚点也不改位置，让出这一帧
       const anchor = !isFollowing ? captureAnchor() : undefined
@@ -312,12 +333,13 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
       await flush()
       if (disposed || restoreRevision !== revision || !host.metrics() || layout.indexOf(anchor.key) < 0) return
       restoreAnchor(anchor)
+      resizePending = false
       syncWindow()
       updateViewingLatest()
       rememberPaused()
       publish()
     } finally {
-      writers--
+      releaseWriter()
     }
   }
 
@@ -365,7 +387,9 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
         // 优先用重排前持续保存的稳定锚点，不能把新矩形当成原阅读位置。
         const anchor = isFollowing ? undefined : pausedAnchor ?? captureAnchor()
         layout.forgetHeights()
-        if (anchor) {
+        // 当前事务成功时合并到它的恢复；失败时由释放后的帧补做，不能丢掉调宽锚点。
+        if (isRestoring()) resizePending = true
+        if (anchor && !isRestoring()) {
           void restore(anchor).then(scheduleWindow)
           return
         }
@@ -382,7 +406,7 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
         if (disposed) return
         scheduleFrame(async () => {
           if (disposed) return
-          await scrollToBottom(followRevision)
+          await scrollToBottom(followRevision, true)
           publish()
           scheduleWindow()
         })
@@ -394,7 +418,7 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
       const anchor = captureAnchor()
       // change 可以跨越多帧，闸门必须在调用它之前关闭，异常时也要释放。
       writers++
-      revision++
+      const changeRevision = ++revision
       try {
         await change()
         if (disposed) return
@@ -402,9 +426,14 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
         if (disposed) return
         await nextFrame()
         if (disposed) return
-        await restore(anchor)
+        // 等待期间的新操作优先，旧事务不能通过 restore 再开代次夺回控制权。
+        if (changeRevision === revision) {
+          await restore(anchor)
+        } else if (!isFollowing) {
+          await restore(pausedAnchor)
+        }
       } finally {
-        writers--
+        releaseWriter()
       }
     },
     capture() {
