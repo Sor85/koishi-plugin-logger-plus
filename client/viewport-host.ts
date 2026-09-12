@@ -69,7 +69,7 @@ export function createDomViewportHost(options: DomViewportHostOptions): Viewport
       if (!element || !content) return []
       const listTop = element.getBoundingClientRect().top
       const lines: ViewportLine[] = []
-      for (const line of content.querySelectorAll<HTMLElement>('[data-log-key]')) {
+      for (const line of Array.from(content.querySelectorAll<HTMLElement>('[data-log-key]'))) {
         const key = line.dataset.logKey
         if (!key) continue
         const rect = line.getBoundingClientRect()

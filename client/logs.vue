@@ -525,6 +525,8 @@ function renderContent(record: Logger.Record) {
   position: relative;
   height: 100%;
   overflow-y: auto;
+  // 位置只由 LogViewport 恢复；Firefox 的原生锚定会在宽度重排后重复补偿。
+  overflow-anchor: none;
   color: var(--terminal-fg);
   background-color: var(--terminal-bg);
   padding: 1rem 1rem;
