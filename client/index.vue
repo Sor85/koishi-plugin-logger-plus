@@ -57,20 +57,15 @@
       >清除</button>
     </div>
     <logs
-      :key="`${selectedPath}:${selectedType}:${searchKeyword}:${selectedDate}:${historyResetKey}`"
-      :logs="filteredLogs"
+      :logs="session.result.value.records"
       show-link
       reset-follow-on-enter
-      load-before
-      :load-date="selectedDate"
-      :load-path="selectedPath"
-      :load-type="selectedType"
-      :load-search="searchKeyword"
-      :load-search-paths="searchPaths"
-      :load-cursor="selectedDate ? dateCursor : undefined"
+      :can-load-more="session.result.value.canLoadMore"
+      :loading-more="session.result.value.loadingMore"
+      :load-more="session.loadMore"
+      :reset-token="resetToken"
       :preserve-paused-position-on-return="preservePausedPositionOnReturn"
-      @prepend-logs="prependLoadedLogs"
-      @view-logs="resetHistoryUnloadTimer"
+      @view-logs="session.keepAlive"
       @filter-path="selectedPath = $event"
     ></logs>
   </div>
@@ -78,21 +73,14 @@
 
 <script lang="ts" setup>
 
-import { send, store } from '@koishijs/client'
-import Logger from 'reggol'
+import { store } from '@koishijs/client'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import DatePicker from './date-picker.vue'
 import Logs from './logs.vue'
-import { mergeLogRecords } from './log-record'
 import OptionSelect from './option-select.vue'
-import type { LogFilter } from '../src/log-filter'
-import { compileLogFilter, getRecordPaths, hasLogFilter, logTypes } from '../src/log-filter'
-
-interface LogPage {
-  logs: Logger.Record[]
-  cursor?: string
-  hasMore: boolean
-}
+import type { LogSessionQuery } from './log-session'
+import { useLogSession } from './use-log-session'
+import { getRecordPaths, logTypes } from '../src/log-filter'
 
 interface PluginEntry {
   path: string
@@ -110,17 +98,12 @@ const selectedType = ref('')
 const selectedDate = ref('')
 const searchInput = ref('')
 const searchKeyword = ref('')
-const historyLogs = ref<Logger.Record[]>([])
-const historyResetKey = ref(0)
-const dateLogs = ref<Logger.Record[]>([])
-const dateCursor = ref<string | undefined>()
 const openPicker = ref<PickerName | ''>('')
 const filterElement = ref<HTMLElement | null>(null)
 const isFilterExpanded = ref(false)
-const historyUnloadDelay = 30 * 60 * 1000
+// 查询切换后递增，供列表组件把视口拉回最新；替代原先复合 :key 的重挂
+const resetToken = ref(0)
 const searchDebounceDelay = 320
-let dateRequestId = 0
-let historyUnloadTimer: ReturnType<typeof setTimeout> | undefined
 let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined
 
 function getPluginLabel(path: string) {
@@ -178,7 +161,8 @@ const pluginLabels = computed(() => {
 
 const pluginOptions = computed(() => {
   const paths = new Set<string>()
-  for (const record of [...historyLogs.value, ...(store.logs ?? []), ...dateLogs.value]) {
+  // 下拉选项取「已加载历史 + 实时流」的全集，不受当前路径筛选影响，切换插件才不会自我收窄
+  for (const record of [...session.result.value.loadedRecords, ...(store.logs ?? [])]) {
     for (const path of getRecordPaths(record)) {
       paths.add(path)
     }
@@ -203,56 +187,33 @@ const searchPaths = computed(() => {
     .map(entry => entry.path)
 })
 
-const recordFilter = computed<LogFilter>(() => ({
+// 会话接收已经形成的查询条件：插件名/标签解析与搜索防抖仍留在展示层。
+// 取拼接后的 searchPaths 参与计算，配置每次推送重算出的新数组不会改变查询内容
+const sessionQuery = computed<LogSessionQuery>(() => ({
+  date: selectedDate.value || undefined,
   path: selectedPath.value || undefined,
   type: selectedType.value || undefined,
   search: searchKeyword.value || undefined,
   searchPaths: searchPaths.value,
 }))
 
-const liveLogs = computed(() => {
-  const logs = historyLogs.value.length
-    ? mergeLogRecords(historyLogs.value, store.logs ?? [])
-    : store.logs ?? []
-  if (!hasLogFilter(recordFilter.value)) return logs
-  // 实时日志每 100ms 推送一次就要把整份已加载日志重过一遍，判定函数必须在循环外编译好
-  const matches = compileLogFilter(recordFilter.value)
-  return logs.filter(record => matches(record))
-})
+// 会话在建立时会立即读取一次开关，两个开关的派生必须早于会话
+const autoUnloadHistoryLogs = computed(() => findLoggerPlusConfig(store.config?.plugins)?.autoUnloadHistoryLogs !== false)
+const preservePausedPositionOnReturn = computed(() => findLoggerPlusConfig(store.config?.plugins)?.preservePausedPositionOnReturn === true)
 
-const filteredLogs = computed(() => selectedDate.value ? dateLogs.value : liveLogs.value)
+const session = useLogSession({
+  query: () => sessionQuery.value,
+  autoUnload: () => autoUnloadHistoryLogs.value,
+  liveLogs: () => store.logs ?? [],
+  // 分页已在会话侧重建，这里只递增 token 让列表把视口拉回最新
+  onQueryReset: () => { resetToken.value++ },
+  // 日期模式卸载后清除日期筛选控件，随之而来的查询变更会被会话按内容去重
+  onDateCleared: () => { selectedDate.value = '' },
+})
 
 const hasActiveFilter = computed(() => !!selectedPath.value || !!selectedType.value || !!selectedDate.value || !!searchInput.value)
 
 const isFilterCollapsed = computed(() => !isFilterExpanded.value && !hasActiveFilter.value && !openPicker.value)
-
-const autoUnloadHistoryLogs = computed(() => findLoggerPlusConfig(store.config?.plugins)?.autoUnloadHistoryLogs !== false)
-const preservePausedPositionOnReturn = computed(() => findLoggerPlusConfig(store.config?.plugins)?.preservePausedPositionOnReturn === true)
-
-function hasLoadedHistoryLogs() {
-  return historyLogs.value.length > 0 || dateLogs.value.length > 0 || !!dateCursor.value
-}
-
-function clearHistoryUnloadTimer() {
-  clearTimeout(historyUnloadTimer)
-  historyUnloadTimer = undefined
-}
-
-function unloadHistoryLogs() {
-  dateRequestId++
-  historyLogs.value = []
-  historyResetKey.value++
-  dateLogs.value = []
-  dateCursor.value = undefined
-  clearHistoryUnloadTimer()
-  if (selectedDate.value) selectedDate.value = ''
-}
-
-function resetHistoryUnloadTimer() {
-  clearHistoryUnloadTimer()
-  if (!autoUnloadHistoryLogs.value || !hasLoadedHistoryLogs()) return
-  historyUnloadTimer = setTimeout(unloadHistoryLogs, historyUnloadDelay)
-}
 
 function applySearchKeyword() {
   clearTimeout(searchDebounceTimer)
@@ -309,64 +270,21 @@ function clearFilters() {
   openPicker.value = ''
 }
 
-function prependLoadedLogs(logs: Logger.Record[], cursor?: string) {
-  if (selectedDate.value) {
-    dateLogs.value = [...logs, ...dateLogs.value]
-    dateCursor.value = cursor
-  } else {
-    historyLogs.value = mergeLogRecords(historyLogs.value, logs)
-  }
-  resetHistoryUnloadTimer()
-}
-
 // 关键词会触发服务端读取已保存日志，逐字输入必须先合并成一次请求
 watch(searchInput, () => {
   clearTimeout(searchDebounceTimer)
   searchDebounceTimer = setTimeout(applySearchKeyword, searchDebounceDelay)
 })
 
-// 插件名命中的路径清单随配置变化，取拼接结果当侦听源：配置每次推送都会重算出新数组，
-// 只按引用比较会让同一份清单反复触发历史日志查询
-watch([selectedDate, selectedPath, selectedType, searchKeyword, () => searchPaths.value.join('\n')], async ([date, path, type, search]) => {
-  if (date || path || type || search) isFilterExpanded.value = true
-  const requestId = ++dateRequestId
-  dateLogs.value = []
-  dateCursor.value = undefined
-  clearHistoryUnloadTimer()
-  if (!date && !path && !type && !search) {
-    resetHistoryUnloadTimer()
-    return
-  }
-  const page = await send('logger-plus/load-before', {
-    date: date || undefined,
-    path: path || undefined,
-    type: type || undefined,
-    search: search || undefined,
-    searchPaths: searchPaths.value,
-  }) as LogPage
-  if (requestId !== dateRequestId) return
-  if (date) {
-    dateLogs.value = page.logs
-    dateCursor.value = page.cursor
-  } else {
-    historyLogs.value = mergeLogRecords(historyLogs.value, page.logs)
-  }
-  resetHistoryUnloadTimer()
-})
-
-watch(autoUnloadHistoryLogs, (enabled) => {
-  if (enabled) {
-    resetHistoryUnloadTimer()
-  } else {
-    clearHistoryUnloadTimer()
-  }
+// 有筛选时展开胶囊；查询、分页与卸载计时的推进全部交给日志会话
+watch(sessionQuery, (query) => {
+  if (query.date || query.path || query.type || query.search) isFilterExpanded.value = true
 })
 
 onMounted(() => document.addEventListener('pointerdown', handleDocumentPointerDown))
 
 onUnmounted(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
-  clearHistoryUnloadTimer()
   clearTimeout(searchDebounceTimer)
 })
 

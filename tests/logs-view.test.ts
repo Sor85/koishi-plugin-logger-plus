@@ -52,10 +52,11 @@ test('视口协调核心与框架无关', async () => {
   assert.match(coreSource, /import type \{ ViewportHost \} from '\.\/viewport-host'/)
 })
 
-test('没有历史日志时不重复合并实时日志', async () => {
-  const source = await readSource('../client/index.vue')
+test('无历史缓存时不重复合并实时日志', async () => {
+  // 合并去重与「无缓存直接返回实时流」已迁入日志会话核心，由 log-session.test.ts 的行为测试覆盖
+  const source = await readSource('../client/log-session.ts')
 
-  assert.match(source, /historyLogs\.value\.length\s*\?\s*mergeLogRecords\(historyLogs\.value, store\.logs \?\? \[\]\)\s*:\s*store\.logs \?\? \[\]/)
+  assert.match(source, /sharedCache\.length\s*\?\s*mergeLogRecords\(sharedCache, live\)\s*:\s*live/)
 })
 
 test('日志列表使用 overlay 自绘滚动条', async () => {
@@ -187,25 +188,29 @@ test('过滤胶囊提供日志等级筛选', async () => {
 
 test('等级和关键词条件同时作用于实时日志与历史日志分页', async () => {
   const indexSource = await readSource('../client/index.vue')
-  const logsSource = await readSource('../client/logs.vue')
+  const sessionSource = await readSource('../client/log-session.ts')
 
-  assert.match(indexSource, /const matches = compileLogFilter\(recordFilter\.value\)/)
-  assert.match(indexSource, /logs\.filter\(record => matches\(record\)\)/)
-  assert.match(indexSource, /:load-type="selectedType"/)
-  assert.match(indexSource, /:load-search="searchKeyword"/)
-  assert.match(indexSource, /watch\(\[selectedDate, selectedPath, selectedType, searchKeyword, \(\) => searchPaths\.value\.join\('\\n'\)\]/)
-  assert.match(logsSource, /type: props\.loadType \|\| undefined,\s*search: props\.loadSearch \|\| undefined,/)
+  // 展示层把等级、关键词与路径清单组装成查询条件交给会话；实时过滤与分页请求由会话统一携带
+  assert.match(indexSource, /type: selectedType\.value \|\| undefined,/)
+  assert.match(indexSource, /search: searchKeyword\.value \|\| undefined,/)
+  assert.match(indexSource, /searchPaths: searchPaths\.value,/)
+  // 会话对实时与缓存合并结果按当前条件编译一次判定函数再过滤
+  assert.match(sessionSource, /const matches = compileLogFilter\(filter\)/)
+  assert.match(sessionSource, /merged\.filter\(record => matches\(record\)\)/)
+  // 分页请求携带同一套筛选条件
+  assert.match(sessionSource, /type: query\.type \|\| undefined,\s*search: query\.search \|\| undefined,/)
 })
 
 test('关键词同时覆盖插件名与日志正文', async () => {
   const indexSource = await readSource('../client/index.vue')
-  const logsSource = await readSource('../client/logs.vue')
+  const sessionSource = await readSource('../client/log-session.ts')
 
+  // 插件名解析仍属展示层：命中路径随查询条件下发
   assert.match(indexSource, /const searchPaths = computed\(\(\) => \{/)
   assert.match(indexSource, /entry\.name\.toLowerCase\(\)\.includes\(keyword\) \|\| entry\.label\?\.toLowerCase\(\)\.includes\(keyword\)/)
   assert.match(indexSource, /searchPaths: searchPaths\.value,/)
-  assert.match(indexSource, /:load-search-paths="searchPaths"/)
-  assert.match(logsSource, /searchPaths: props\.loadSearchPaths,/)
+  // 会话把命中路径清单一并带进分页请求
+  assert.match(sessionSource, /searchPaths: query\.searchPaths,/)
 })
 
 test('下拉菜单铺平原生滚动条底色并完整显示插件名', async () => {
@@ -254,8 +259,9 @@ test('滚到顶部后由按钮触发加载更早日志，不再自动预加载',
 
   assert.match(source, /class="log-load-more-button"/)
   assert.match(source, /@click="loadBeforeLogs"/)
-  assert.match(source, /\{\{ loadingBefore \? '正在加载' : '查看更多消息' \}\}/)
-  assert.match(source, /const showLoadMore = computed\(\(\) => Boolean\(props\.loadBefore\) && hasMoreBefore\.value\)/)
+  assert.match(source, /\{\{ loadingMore \? '正在加载' : '查看更多消息' \}\}/)
+  // 是否还有更早记录由会话裁决，列表组件只读结果
+  assert.match(source, /const canLoadMore = computed\(\(\) => Boolean\(props\.canLoadMore\)\)/)
   assert.match(source, /\.log-load-more-button\s*\{[\s\S]*height:\s*var\(--logger-line-height\);\s*margin-top:\s*-1rem;/)
   assert.doesNotMatch(source, /preloadLogThreshold/)
   assert.doesNotMatch(source, /getVisibleStartIndex/)

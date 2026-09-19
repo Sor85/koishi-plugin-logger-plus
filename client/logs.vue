@@ -14,12 +14,12 @@
       @pointerdown="markViewingLogs"
     >
       <button
-        v-if="showLoadMore"
+        v-if="canLoadMore"
         class="log-load-more-button"
         type="button"
-        :disabled="loadingBefore"
+        :disabled="loadingMore"
         @click="loadBeforeLogs"
-      >{{ loadingBefore ? '正在加载' : '查看更多消息' }}</button>
+      >{{ loadingMore ? '正在加载' : '查看更多消息' }}</button>
       <!-- 虚拟滚动：只渲染窗口内的日志行，窗口外的高度由上下内边距占位 -->
       <div
         ref="logViewport"
@@ -87,7 +87,7 @@
 
 <script lang="ts" setup>
 
-import { Time, message, send, store } from '@koishijs/client'
+import { Time, message, store } from '@koishijs/client'
 import {} from '@koishijs/plugin-config'
 import Logger from 'reggol'
 import ansi from 'ansi_up'
@@ -104,26 +104,18 @@ const props = defineProps<{
   maxHeight?: string,
   resetFollowOnEnter?: boolean,
   preservePausedPositionOnReturn?: boolean,
-  loadBefore?: boolean,
-  loadDate?: string,
-  loadPath?: string,
-  loadType?: string,
-  loadSearch?: string,
-  loadSearchPaths?: string[],
-  loadCursor?: string,
+  // 分页与历史生命周期由日志会话持有，列表组件只表达意图并读取结果
+  canLoadMore?: boolean,
+  loadingMore?: boolean,
+  loadMore?: () => Promise<void>,
+  // 查询切换时递增；用来在不重挂子树的前提下让视口回到最新
+  resetToken?: number,
 }>()
 
 const emit = defineEmits<{
-  (name: 'prepend-logs', logs: Logger.Record[], cursor?: string): void
   (name: 'view-logs'): void
   (name: 'filter-path', path: string): void
 }>()
-
-interface LogPage {
-  logs: Logger.Record[]
-  cursor?: string
-  hasMore: boolean
-}
 
 interface LogMenuItem {
   key: string
@@ -170,16 +162,9 @@ const router = useRouter()
 const logList = ref<HTMLElement | null>(null)
 const logViewport = ref<HTMLElement | null>(null)
 const nativeScrollbarWidth = ref(0)
-const loadingBefore = ref(false)
-const loadCursor = ref<string | undefined>()
-const hasMoreBefore = ref(true)
 const logMenu = ref<LogMenuState | null>(null)
 const logMenuElement = ref<HTMLElement | null>(null)
 const logMenuStyle = ref({ left: '0px', top: '0px' })
-
-watch(() => props.loadCursor, (cursor) => {
-  loadCursor.value = cursor
-})
 
 // 滚动位置、渲染窗口与追踪状态全部交给 LogViewport 协调，这里只接收结果
 const { viewport, logWindow, isFollowing, isViewingLatest } = useLogViewport({
@@ -193,6 +178,10 @@ let pausedPosition: LogAnchor | undefined
 
 const listStyle = computed(() => props.maxHeight ? { maxHeight: props.maxHeight } : {})
 
+// 查询切换由会话递增 resetToken：分页进度已在会话侧重建，这里只把视口拉回最新。
+// 不再靠复合 :key 拆掉整棵子树来重置，数据正确性不再依赖 Vue 重挂协议
+watch(() => props.resetToken, () => viewport.followLatest())
+
 // 只把窗口内的日志交给模板；下标取全量清单里的绝对下标，分隔行判定与锚点都依赖它
 const visibleLogs = computed(() => {
   const items: VisibleLog[] = []
@@ -204,8 +193,9 @@ const visibleLogs = computed(() => {
   return items
 })
 
-// 更早的日志改为手动加载：滑到顶部才会看到这个入口，点击后才继续读取磁盘
-const showLoadMore = computed(() => Boolean(props.loadBefore) && hasMoreBefore.value)
+// 更早的日志改为手动加载：滑到顶部才会看到这个入口。是否还有更早记录由会话裁决
+const canLoadMore = computed(() => Boolean(props.canLoadMore))
+const loadingMore = computed(() => Boolean(props.loadingMore))
 
 // 遮罩至少铺满列表右侧内边距：占位型滚动条按实测宽度盖住，覆盖式滚动条画在内边距上也一并盖住。
 // 内边距区域本来就没有内容，铺同色底不会遮住日志正文
@@ -229,31 +219,12 @@ function returnToLatest() {
 }
 
 async function loadBeforeLogs() {
-  if (!props.loadBefore || loadingBefore.value || !hasMoreBefore.value) return
-  const firstLog = props.logs[0]
+  if (!props.loadMore || !canLoadMore.value || loadingMore.value) return
   markViewingLogs()
-  loadingBefore.value = true
-  try {
-    // 前插会把已加载的日志整体推下去；交给 around 执行，取锚点与复位的顺序封在它里面
-    await viewport.around(async () => {
-      const page = await send('logger-plus/load-before', {
-        date: props.loadDate || undefined,
-        path: props.loadPath || undefined,
-        type: props.loadType || undefined,
-        search: props.loadSearch || undefined,
-        searchPaths: props.loadSearchPaths,
-        cursor: loadCursor.value ?? (firstLog ? `${firstLog.timestamp}:${firstLog.id}` : undefined),
-      }) as LogPage
-      loadCursor.value = page.cursor
-      hasMoreBefore.value = page.hasMore
-      if (!page.logs.length) return
-      emit('prepend-logs', page.logs, page.cursor)
-    })
-  } catch {
-    message.error('加载更早日志失败')
-  } finally {
-    loadingBefore.value = false
-  }
+  // 前插会把已加载的日志整体推下去：整个「取一页 + 写入记录」交给 around 执行，
+  // 取锚点、改数据、按锚点复位的顺序封在它里面。会话在写入前会核对请求仍属于当前查询，
+  // 请求有效性与阅读位置保护分属会话核心与视口核心，两者不互相接管
+  await viewport.around(() => props.loadMore!())
 }
 
 function handleScroll() {
