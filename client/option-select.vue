@@ -7,6 +7,7 @@
       role="combobox"
       :style="minWidth ? { minWidth } : undefined"
       :tabindex="tabindex"
+      :aria-label="ariaLabel"
       :aria-expanded="open"
       aria-haspopup="listbox"
       @click="emit('update:open', !open)"
@@ -47,6 +48,7 @@ const props = defineProps<{
   emptyLabel: string
   minWidth?: string
   tabindex?: number
+  ariaLabel?: string
 }>()
 
 const emit = defineEmits<{

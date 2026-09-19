@@ -6,13 +6,16 @@
       @click="expandFilter"
     >
       <span class="logger-filter-dot"></span>
-      <label class="logger-filter-summary" for="logger-filter-path">过滤</label>
+      <!-- 摘要文字描述的是整条过滤栏（点击容器展开），不再用 for 关联插件选择器：
+           label 的 for 会把点击转发给触发按钮，导致展开胶囊时误开插件下拉 -->
+      <span class="logger-filter-summary">过滤</span>
       <OptionSelect
         id="logger-filter-path"
         v-model="selectedPath"
         :open="openPicker === 'plugin'"
         :options="pluginOptions"
         empty-label="全部插件"
+        aria-label="插件"
         :tabindex="isFilterCollapsed ? -1 : undefined"
         @update:open="setPickerOpen('plugin', $event)"
       />
@@ -225,15 +228,26 @@ async function animateFilterWidth(fromWidth: number) {
   await nextTick()
   const element = filterElement.value
   if (!element) return
+  // 展开态宽度是 fit-content，取决于已完成过渡的 padding/gap。nextTick 时这些过渡刚开始、还停在
+  // 收起态取值，此刻直接量会偏小；先临时关掉过渡把 padding/gap 逼到终值，量到真实终宽再跑动画，
+  // 否则 width 动画会钉在偏小值上、结束释放回 fit-content 时突然蹦大一截（跳帧）
+  element.style.transition = 'none'
   const toWidth = element.getBoundingClientRect().width
+  element.style.transition = ''
   element.getAnimations().forEach(animation => animation.cancel())
-  element.animate([
+  // width 是布局属性、无法走合成器，动画期间提前挂 will-change 让浏览器把重排/背景模糊
+  // 的重绘准备好，减少逐帧掉帧；结束或被打断都要清掉提示，避免长期占用合成资源
+  element.style.willChange = 'width'
+  const animation = element.animate([
     { width: `${fromWidth}px` },
     { width: `${toWidth}px` },
   ], {
-    duration: 180,
-    easing: 'ease-out',
+    duration: 220,
+    // 收尾更缓的曲线，替代生硬的 ease-out，观感更顺
+    easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
   })
+  const clearHint = () => { element.style.willChange = '' }
+  animation.finished.then(clearHint, clearHint)
 }
 
 function expandFilter() {
@@ -334,16 +348,22 @@ onUnmounted(() => {
   box-shadow: 0 10px 28px rgb(0 0 0 / 18%), inset 0 1px 0 rgb(255 255 255 / 8%);
   backdrop-filter: blur(18px) saturate(140%);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
-  transition: padding 0.18s ease-out, gap 0.18s ease-out, border-color 0.18s ease-out, box-shadow 0.18s ease-out;
+  // 时长/缓动与 animateFilterWidth 的 width 动画对齐，避免容器与内边距、子元素收尾错拍
+  transition: padding 0.22s cubic-bezier(0.22, 1, 0.36, 1), gap 0.22s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.22s ease-out, box-shadow 0.22s ease-out;
 
   > :not(.logger-filter-dot):not(.logger-filter-summary) {
     max-width: 22rem;
     opacity: 1;
     transform: translateX(0) scale(1);
-    transition: opacity 0.14s ease-out 0.04s, transform 0.18s ease-out, max-width 0.24s ease-out, margin 0.2s ease-out;
+    transition: opacity 0.16s ease-out 0.05s, transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), max-width 0.22s cubic-bezier(0.22, 1, 0.36, 1), margin 0.22s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .logger-filter-summary {
+    // 摘要文字改成 span 后不再继承 label 的 nowrap：展开动画瞬间容器仍窄，缺了它「过滤」会折行
+    white-space: nowrap;
+    color: color-mix(in srgb, var(--terminal-fg) 78%, transparent);
+    font-size: var(--logger-label-font-size);
+    letter-spacing: 0.04em;
     transition: color 0.16s ease, opacity 0.16s ease, transform 0.18s ease;
   }
 
