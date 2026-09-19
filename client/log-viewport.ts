@@ -132,8 +132,10 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
   // 取视口内第一条可见日志：它的下沿还没滑出容器顶部就算可见。
   // 容器已离开 DOM 时 metrics() 给不出几何，此时读到的位置不稳定，不能记
   function captureAnchor(): LogAnchor | undefined {
-    if (!host.metrics()) return undefined
-    const line = host.lines().find(item => item.top + item.height >= 0)
+    const metrics = host.metrics()
+    if (!metrics) return undefined
+    // 快速滚动可越过整个旧窗口；屏外行不是阅读锚点，恢复它会把用户拉回旧内容。
+    const line = host.lines().find(item => item.top < metrics.clientHeight && item.top + item.height >= 0)
     if (!line) return undefined
     return { key: line.key, offset: line.top }
   }
@@ -270,11 +272,18 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
       const frameRevision = revision
       // 不变量 1：恢复位置期间不取锚点也不改位置，让出这一帧
       const anchor = !isFollowing ? captureAnchor() : undefined
+      if (anchor) {
+        // 新进入窗口的多行日志尚未实测，换窗本身就可能移动内容。
+        // 必须沿用换窗前的锚点完成测量与定位，不能在换窗后重新取锚点。
+        await restore(anchor, true)
+        return
+      }
       syncWindow()
       publish()
       await flush()
-      if (disposed) return
-      await settle(anchor, frameRevision)
+      if (disposed || frameRevision !== revision) return
+      // 快速滚动越过旧窗口时先按目标位置换窗，再取真正可见的日志用于测量补偿。
+      await settle(!isFollowing ? captureAnchor() : undefined, frameRevision)
     })
   }
 
@@ -311,9 +320,19 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
    */
   const restoreRounds = 3
 
-  async function restore(anchor?: LogAnchor) {
+  async function restore(anchor?: LogAnchor, scrolling = false) {
     const metrics = host.metrics()
     if (disposed || !metrics || !anchor || layout.indexOf(anchor.key) < 0) return
+    // 普通滚动的换窗补偿不是导航：浏览器可能先滚动、稍后才派发 scroll。
+    // 仅核对 revision 不足以发现这段移动；旧帧必须让路，不能把用户拉回取锚点时的位置。
+    const interrupted = () => {
+      if (disposed || restoreRevision !== revision || !host.metrics() || layout.indexOf(anchor.key) < 0) return true
+      if (scrolling && host.metrics()!.scrollTop !== metrics.scrollTop) {
+        scheduleWindow()
+        return true
+      }
+      return false
+    }
     writers++
     const restoreRevision = ++revision
     try {
@@ -323,7 +342,7 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
         syncWindow(targetOffset())
         publish()
         await flush()
-        if (disposed || restoreRevision !== revision || !host.metrics() || layout.indexOf(anchor.key) < 0) return
+        if (interrupted()) return
         if (!measureLines()) break
       }
       // 最后一轮测量也会改上下占位。先提交占位，再只按实际矩形写一次，
@@ -331,7 +350,7 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
       syncWindow(targetOffset())
       publish()
       await flush()
-      if (disposed || restoreRevision !== revision || !host.metrics() || layout.indexOf(anchor.key) < 0) return
+      if (interrupted()) return
       restoreAnchor(anchor)
       resizePending = false
       syncWindow()
@@ -366,8 +385,9 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
       } else if (isViewingLatest) {
         setFollowing(true)
       }
-      // 滚动当帧先按已有高度换出新窗口，避免等到下一帧才补上内容
-      syncWindow()
+      // 暂停浏览时由下一帧先取旧窗口锚点，再换窗、测量和补偿。
+      // 提前发布新窗口会把未实测长日志的高度差直接变成可见跳动。
+      if (isFollowing) syncWindow()
       rememberPaused()
       publish()
       scheduleWindow()
@@ -428,6 +448,12 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
         if (disposed) return
         // 等待期间的新操作优先，旧事务不能通过 restore 再开代次夺回控制权。
         if (changeRevision === revision) {
+          // 成功加载历史后继续阅读，而不是沿用不足一屏时的自动追踪状态。
+          // 空列表首次加载没有锚点，仍应贴底；等待期间的显式回底由新代次优先处理。
+          if (anchor) {
+            setFollowing(false)
+            pausedAnchor = anchor
+          }
           await restore(anchor)
         } else if (!isFollowing) {
           await restore(pausedAnchor)

@@ -174,6 +174,88 @@ function createHarness(options: HarnessOptions) {
   }
 }
 
+test('恢复等待 DOM 刷新时滚轮已经移动但 scroll 事件尚未送达，不得拉回旧锚点', async () => {
+  let onFlush: (() => void) | undefined
+  const harness = createHarness({ keys: keysOf(1000), flush: async () => onFlush?.() })
+  await harness.mount()
+  harness.setScrollTop(10000)
+  harness.viewport.handleScroll()
+  await harness.advance(4)
+  await harness.run(harness.viewport.around(() => harness.setItems(keysOf(1200))))
+
+  for (let step = 0; step < 10; step++) {
+    harness.setScrollTop(harness.scrollTop() - 40)
+    harness.viewport.handleScroll()
+    const expected = harness.scrollTop() - 60
+    onFlush = () => {
+      onFlush = undefined
+      // 浏览器先更新滚动位置，再在后续事件循环派发 scroll。
+      harness.setScrollTop(expected)
+    }
+    await harness.advance(2)
+    assert.equal(harness.scrollTop(), expected)
+    harness.viewport.handleScroll()
+    await harness.advance(3)
+    assert.equal(harness.scrollTop(), expected)
+  }
+})
+
+test('最新日志不足一屏时加载历史应暂停追踪，滑到顶部后追加不能拉回底部', async () => {
+  const harness = createHarness({ keys: keysOf(3, 200), height: () => 40 })
+  await harness.mount()
+  assert.equal(harness.state().isFollowing, true)
+  await harness.run(harness.viewport.around(() => harness.setItems(keysOf(203))))
+  assert.equal(harness.state().isFollowing, false)
+  harness.setScrollTop(0)
+  harness.viewport.handleScroll()
+  await harness.advance(5)
+  harness.setItems(keysOf(204))
+  await harness.advance(5)
+  assert.equal(harness.scrollTop(), 0)
+  assert.equal(harness.state().window.start, 0)
+  assert.equal(harness.state().isFollowing, false)
+})
+
+test('快速上滚越过旧窗口后不得把屏外日志记成阅读锚点', async () => {
+  const harness = createHarness({ keys: keysOf(1000), height: () => 1600, scrollEvents: true })
+  await harness.mount()
+  await harness.advance(5)
+  harness.setScrollTop(0)
+  harness.viewport.handleScroll()
+  assert.equal(harness.viewport.capture(), undefined)
+  await harness.advance(5)
+  assert.equal(harness.scrollTop(), 0)
+  assert.equal(harness.state().window.start, 0)
+  assert.equal(harness.topOf('0'), 10)
+  assert.equal(harness.state().isFollowing, false)
+})
+
+test('加载长篇历史后快速滑到顶部，必须显示最早记录而非恢复屏外旧窗口', async () => {
+  const harness = createHarness({
+    keys: keysOf(100, 200),
+    height: key => Number(key) < 200 ? 1600 : 20,
+    scrollEvents: true,
+  })
+  await harness.mount()
+  harness.setScrollTop(0)
+  harness.viewport.handleScroll()
+  await harness.advance(5)
+  await harness.run(harness.viewport.around(() => harness.setItems(keysOf(300))))
+  harness.setScrollTop(3000)
+  harness.viewport.handleScroll()
+  await harness.advance(5)
+
+  for (let round = 0; round < 3; round++) {
+    harness.setScrollTop(0)
+    harness.viewport.handleScroll()
+    await harness.advance(5)
+    assert.equal(harness.scrollTop(), 0)
+    assert.equal(harness.state().window.start, 0)
+    assert.equal(harness.topOf('0'), 10)
+    assert.equal(harness.state().isFollowing, false)
+  }
+})
+
 test('异步前插尚未完成时逐帧修正不得提前写滚动位置', async () => {
   const harness = createHarness({ keys: keysOf(30, 100), height: () => 100 })
   await harness.mount()
@@ -475,6 +557,35 @@ test('向上滚动后转入暂停，此后追加日志阅读位置不动', async
   assert.equal(harness.state().isFollowing, false)
   assert.equal(harness.scrollTop(), scrollTop)
   assert.equal(harness.topOf(before.key), before.top)
+})
+
+test('十万条多行日志连续上滚时，换窗不能放大滚轮位移', async () => {
+  const harness = createHarness({
+    keys: keysOf(100_000),
+    height: key => Number(key) % 5 === 0 ? 1600 : 20,
+    clientHeight: 800,
+    scrollEvents: true,
+  })
+  await harness.mount()
+  await harness.advance(6)
+
+  for (let step = 0; step < 240; step++) {
+    harness.setScrollTop(harness.scrollTop() - 100)
+    // 先读滚轮移动后的真实行位置，不能用换窗后的矩形作期望值。
+    const before = harness.firstVisible()!
+    harness.viewport.handleScroll()
+    await harness.advance(5)
+    assert.equal(harness.topOf(before.key), before.top, `第 ${step + 1} 次上滚发生额外位移`)
+    assert.equal(harness.state().isFollowing, false)
+  }
+
+  for (let step = 0; step < 120; step++) {
+    harness.setScrollTop(harness.scrollTop() + 100)
+    const before = harness.firstVisible()!
+    harness.viewport.handleScroll()
+    await harness.advance(5)
+    assert.equal(harness.topOf(before.key), before.top, `第 ${step + 1} 次下滚发生额外位移`)
+  }
 })
 
 test('前插更早的日志后视口第一条仍停在原处', async () => {
