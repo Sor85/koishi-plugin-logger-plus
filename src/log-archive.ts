@@ -23,6 +23,7 @@
 import { Logger } from 'koishi'
 import { isMissingFileError, LogFileIndex } from './log-file-index'
 import { compileLogFilter, hasLogFilter, isLogType, LogFilter } from './log-filter'
+import { compareLogRecords, encodeLogIdentity, isBeforeCursor } from './log-identity'
 import { readRecordsBackward } from './log-reader'
 
 const LOG_PAGE_SIZE = 200
@@ -54,20 +55,6 @@ export interface LogArchiveOptions {
   reportError(error: unknown): void
 }
 
-function compareRecords(left: Logger.Record, right: Logger.Record) {
-  return left.timestamp - right.timestamp || left.id - right.id
-}
-
-function createLogCursor(record: Logger.Record) {
-  return `${record.timestamp}:${record.id}`
-}
-
-function isBeforeCursor(record: Logger.Record, cursor?: string) {
-  if (!cursor) return true
-  const [timestamp, id] = cursor.split(':').map(Number)
-  return record.timestamp < timestamp || record.timestamp === timestamp && record.id < id
-}
-
 function normalizeLogQuery(query?: string | LogQuery): LogQuery {
   if (typeof query === 'string') return { cursor: query }
   return query ?? {}
@@ -95,7 +82,7 @@ function normalizeSearchPaths(paths?: readonly string[]) {
 }
 
 function sortLogs(records: Logger.Record[]) {
-  return records.sort(compareRecords)
+  return records.sort(compareLogRecords)
 }
 
 /**
@@ -169,6 +156,6 @@ export class LogArchive {
     // 收集顺序是从新到旧，先翻回落盘顺序，再按时间排一遍：进程重启会让 id 从头计数，只靠 id
     // 排不出跨重启的先后
     const logs = sortLogs(collected.reverse())
-    return { logs, cursor: logs[0] ? createLogCursor(logs[0]) : cursor, hasMore }
+    return { logs, cursor: logs[0] ? encodeLogIdentity(logs[0]) : cursor, hasMore }
   }
 }

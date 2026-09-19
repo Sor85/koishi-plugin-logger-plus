@@ -10,13 +10,14 @@ async function readSource(path: string) {
   }
 }
 
-test('日志行使用时间戳和 id 作为稳定渲染 key', async () => {
+test('日志行把稳定标识接到渲染 key', async () => {
   const source = await readSource('../client/logs.vue')
 
+  // 渲染 key 的模板接线仍在此断言；标识如何编码由 log-identity.test.ts 的行为测试锁定
   assert.match(source, /:key="item\.key"/)
   assert.match(source, /:data-log-key="item\.key"/)
   assert.match(source, /v-memo="\[item\.key, item\.index, item\.start\]"/)
-  assert.match(source, /items\.push\(\{ key: getLogKey\(record\), index, record, start: isStart\(index\) \}\)/)
+  assert.match(source, /key: getLogKey\(record\)/)
 })
 
 test('日志列表只渲染窗口内的日志行', async () => {
