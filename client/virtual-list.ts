@@ -18,7 +18,7 @@ export interface VirtualListWindow {
 
 export interface VirtualListLayout {
   /** 更新条目清单，已实测高度按标识继续沿用 */
-  setItems(keys: string[]): void
+  setItems(keys: string[], estimates?: readonly number[]): void
   /** 更新估算行高，只影响尚未实测的条目 */
   setEstimatedHeight(height: number): void
   /** 记录实测高度，返回偏移是否需要重算 */
@@ -31,7 +31,9 @@ export interface VirtualListLayout {
   offsetOf(index: number): number
   /** 像素偏移转成「记录下标 + 行内比例」，不受其他行估算高度修正影响 */
   positionAt(offset: number): number
-  /** 按统一估算行高计算的全量高度；不随逐行实测变化，用于稳定滑块尺寸 */
+  /** 将记录位置映射到稳定的预估像素坐标，不随逐行实测改变 */
+  estimatedOffsetAt(position: number): number
+  /** 根据正文预估的全量高度；未提供逐条预估时使用统一行高 */
   estimatedTotalHeight(): number
   /** 全部条目的总高度 */
   totalHeight(): number
@@ -50,18 +52,33 @@ export function createVirtualListLayout(estimatedHeight: number): VirtualListLay
   let keys: string[] = []
   let indexes = new Map<string, number>()
   const measured = new Map<string, number>()
+  const estimated = new Map<string, number>()
+  const estimatedOffsets: number[] = [0]
+  let estimatedDirty = 1
   // offsets[i] 是第 i 条的顶部偏移，offsets[keys.length] 是总高度
   let offsets: number[] = [0]
   // 第一个可能失效的偏移下标：小于它的偏移一律有效
   let dirty = 1
 
-  function heightAt(index: number) {
-    const height = measured.get(keys[index])
-    return height === undefined ? estimate : height
+  function estimatedAt(index: number) {
+    return estimated.get(keys[index]) ?? estimate
   }
 
-  function markDirty(index: number) {
+  function heightAt(index: number) {
+    return measured.get(keys[index]) ?? estimatedAt(index)
+  }
+
+  function markDirty(index: number, estimatesChanged = false) {
     if (index < dirty) dirty = index
+    if (estimatesChanged && index < estimatedDirty) estimatedDirty = index
+  }
+
+  function ensureEstimatedOffsets() {
+    estimatedOffsets.length = keys.length + 1
+    for (let index = Math.max(1, estimatedDirty); index <= keys.length; index++) {
+      estimatedOffsets[index] = estimatedOffsets[index - 1] + estimatedAt(index - 1)
+    }
+    estimatedDirty = keys.length + 1
   }
 
   function ensureOffsets() {
@@ -80,19 +97,28 @@ export function createVirtualListLayout(estimatedHeight: number): VirtualListLay
     }
   }
 
-  function setItems(nextKeys: string[]) {
+  function setItems(nextKeys: string[], nextEstimates?: readonly number[]) {
     const limit = Math.min(keys.length, nextKeys.length)
     let diff = 0
     while (diff < limit && keys[diff] === nextKeys[diff]) diff++
-    if (diff === limit && keys.length === nextKeys.length) return
-    keys = nextKeys
-    indexes = new Map()
-    for (let index = 0; index < keys.length; index++) {
-      indexes.set(keys[index], index)
+    if (diff !== limit || keys.length !== nextKeys.length) {
+      keys = nextKeys
+      indexes = new Map()
+      for (let index = 0; index < keys.length; index++) indexes.set(keys[index], index)
+      pruneMeasured()
+      for (const key of estimated.keys()) if (!indexes.has(key)) estimated.delete(key)
+      // 前 diff 条没变，它们的顶部偏移连同 offsets[diff] 都还有效。
+      markDirty(diff + 1, true)
     }
-    pruneMeasured()
-    // 前 diff 条没变，它们的顶部偏移连同 offsets[diff] 都还有效
-    markDirty(diff + 1)
+    if (!nextEstimates) return
+    for (let index = 0; index < keys.length; index++) {
+      const height = nextEstimates[index]
+      if (!(height > 0) || !Number.isFinite(height) || estimated.get(keys[index]) === height) continue
+      // 同一记录的预估改变意味着正文或排版条件改变，旧实测高度也不能继续沿用。
+      if (estimated.has(keys[index])) measured.delete(keys[index])
+      estimated.set(keys[index], height)
+      markDirty(index + 1, true)
+    }
   }
 
   function findIndexAtOffset(offset: number) {
@@ -116,7 +142,7 @@ export function createVirtualListLayout(estimatedHeight: number): VirtualListLay
     setEstimatedHeight(height) {
       if (!(height > 0) || height === estimate) return
       estimate = height
-      markDirty(1)
+      markDirty(1, true)
     },
     measure(key, height) {
       if (!(height > 0) || measured.get(key) === height) return false
@@ -148,8 +174,16 @@ export function createVirtualListLayout(estimatedHeight: number): VirtualListLay
       const index = findIndexAtOffset(offset)
       return index + (offset - offsets[index]) / heightAt(index)
     },
+    estimatedOffsetAt(position) {
+      ensureEstimatedOffsets()
+      if (position <= 0 || !keys.length) return 0
+      if (position >= keys.length) return estimatedOffsets[keys.length]
+      const index = Math.floor(position)
+      return estimatedOffsets[index] + (position - index) * estimatedAt(index)
+    },
     estimatedTotalHeight() {
-      return keys.length * estimate
+      ensureEstimatedOffsets()
+      return estimatedOffsets[keys.length]
     },
     totalHeight() {
       ensureOffsets()

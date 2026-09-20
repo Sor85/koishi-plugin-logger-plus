@@ -3,18 +3,18 @@ import type { ViewportMetrics } from './viewport-host'
 import { clampProgress, scrollbarGeometry } from './scrollbar-geometry'
 
 /**
- * 原生像素坐标仍用于正文锚点补偿；滑块使用记录坐标。
- * 未测量历史行从 20px 展开成数百像素时，scrollTop 和 scrollHeight 都会增长，
- * 其比值会倒退；「第几条 + 行内比例」则只随实际阅读位置改变。
+ * 原生像素坐标仍用于正文锚点补偿；滑块使用按文本预估高度加权的记录坐标。
+ * 长 JSON 不再与一行短消息占据相同距离。实测只改变像素到行内比例的换算，
+ * 不改变每条记录的预估权重，因此屏外测量不会使阅读进度倒退。
  */
 export function logScrollbarMetrics(layout: VirtualListLayout, metrics: ViewportMetrics) {
-  const top = layout.positionAt(metrics.scrollTop - metrics.contentTop)
-  const bottom = layout.positionAt(metrics.scrollTop + metrics.clientHeight - metrics.contentTop)
-  // 位置需要真实可见记录范围，尺寸却不能随一屏中的记录数变化。
-  // 用总条数与统一估算行高决定长度，逐行测量只修正位置；最多占半条轨道，
-  // 避免仅一条超长日志时，估算不足一屏却把可拖动轨道全部占满。
-  const thumbRatio = metrics.clientHeight / Math.max(metrics.clientHeight * 2, layout.estimatedTotalHeight(), 1)
-  return { offset: top, viewport: bottom - top, total: layout.positionAt(Infinity), thumbRatio }
+  const position = (offset: number) => layout.estimatedOffsetAt(layout.positionAt(offset))
+  const top = position(metrics.scrollTop - metrics.contentTop)
+  const bottom = position(metrics.scrollTop + metrics.clientHeight - metrics.contentTop)
+  // 长度只取整份清单的预估高度，不随当前可见行的实测结果忽大忽小。
+  const total = layout.estimatedTotalHeight()
+  const thumbRatio = metrics.clientHeight / Math.max(metrics.clientHeight * 2, total, 1)
+  return { offset: top, viewport: bottom - top, total, thumbRatio }
 }
 
 /** 正反映射使用同一坐标系；实测行高更新后重新求解，不能把记录比例直接乘像素总高度。 */

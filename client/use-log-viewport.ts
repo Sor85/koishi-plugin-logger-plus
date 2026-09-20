@@ -23,6 +23,8 @@ export interface UseLogViewportOptions {
   fallbackLineHeight: number
   /** 状态变化时搭车更新渲染层的细节，例如原生滚动条宽度遮罩 */
   onStateChange?(state: LogViewportState): void
+  /** 通知文本预估层检查排版参数，普通滚动不触发 */
+  onResize?(): void
 }
 
 export function useLogViewport(options: UseLogViewportOptions) {
@@ -55,16 +57,21 @@ export function useLogViewport(options: UseLogViewportOptions) {
   let observer: ResizeObserver | undefined
   let mountFrame: number | undefined
 
+  function handleResize() {
+    options.onResize?.()
+    viewport.handleResize()
+  }
+
   onMounted(() => {
     const element = options.list.value
     if (element && typeof ResizeObserver !== 'undefined') {
-      observer = new ResizeObserver(() => viewport.handleResize())
+      observer = new ResizeObserver(handleResize)
       observer.observe(element)
     }
     // 没有 ResizeObserver 时也要走一次首帧：量估算行高、贴底、备好第一屏
     mountFrame = requestAnimationFrame(() => {
       mountFrame = undefined
-      viewport.handleResize()
+      handleResize()
     })
   })
 

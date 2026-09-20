@@ -10,7 +10,7 @@ test('记录坐标保留长日志的行内比例，其他行实测不会改变�
   layout.measure('b', 1000)
   const metrics = { scrollTop: 530, contentTop: 10, clientHeight: 200, clientWidth: 600, scrollHeight: 1070 }
   const before = logScrollbarMetrics(layout, metrics)
-  assert.equal(before.offset, 1.5)
+  assert.equal(before.offset, 1.5 * 20) // 未提供正文预估时仍以默认行高作为稳定权重
   layout.measure('a', 800)
   const after = logScrollbarMetrics(layout, { ...metrics, scrollTop: 1310, scrollHeight: 1850 })
   assert.deepEqual(after, before)

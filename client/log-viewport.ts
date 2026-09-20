@@ -65,7 +65,7 @@ export interface LogViewport {
   /** 自绘滑块的记录坐标与拖拽入口，不使用正在变化的 DOM 总高度比例 */
   scrollbar: ScrollbarSource
   /** 更新日志清单，已实测高度按标识继续沿用；须在渲染层提交 DOM 之前调用 */
-  setItems(keys: string[]): void
+  setItems(keys: string[], estimates?: readonly number[]): void
   handleScroll(): void
   handleResize(): void
   /** 回到最新日志并恢复追踪 */
@@ -240,10 +240,40 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
     lastScrollTop = metrics.scrollTop
   }
 
+  function handleScroll() {
+    if (disposed) return
+    const metrics = host.metrics()
+    if (!metrics) return
+    const previousScrollTop = lastScrollTop
+    // 模块刚写入的位置会异步产生 scroll，不能把自己的事件当成用户恢复追踪。
+    if (metrics.scrollTop === previousScrollTop) return
+    const clamped = Math.max(0, Math.min(previousScrollTop, metrics.scrollHeight - metrics.clientHeight))
+    if (metrics.scrollTop === clamped) {
+      // 只有内容收缩导致的边界钳制，未发生独立的用户位移，不能据此切换追踪状态。
+      updateViewingLatest()
+      return
+    }
+    revision++
+    intent++
+    updateViewingLatest()
+    if (metrics.scrollTop < previousScrollTop) setFollowing(false)
+    else if (isViewingLatest) setFollowing(true)
+    // 暂停浏览时由下一帧先取锚点，再换窗、测量和补偿。
+    if (isFollowing) syncWindow()
+    rememberPaused()
+    publish()
+    scheduleWindow()
+  }
+
   async function scrollToBottom(frameRevision = revision, userRequested = false) {
     // 显式回底已递增代次，旧恢复失去写入权；不必等待网络请求结束才执行用户动作。
     // 自动贴底仍受闸门约束，二者在每次 await 后都必须持有当前代次。
-    const superseded = () => disposed || frameRevision !== revision || (!userRequested && isRestoring())
+    const superseded = () => {
+      // scrollTop 可先于 scroll 事件改变。每个异步边界都先接收实际移动，
+      // 否则旧贴底帧会把用户的新位置覆盖，再把自己的回底事件当成无变化。
+      handleScroll()
+      return disposed || frameRevision !== revision || (!userRequested && isRestoring())
+    }
     // 先渲染并测量末尾窗口，再写入最终位置。先滚后换窗会让 DOM 总高度短暂收缩，
     // 浏览器钳制 scrollTop 后发出的 scroll 曾被误判成用户上滚，导致追踪自动暂停。
     for (let round = 0; round < 3; round++) {
@@ -300,6 +330,7 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
    * 不变量 2：锚点由调用方在改动之前取好传进来；追踪最新日志时不需要锚点，重新贴底即可。
    */
   async function settle(anchor: LogAnchor | undefined, frameRevision: number) {
+    handleScroll()
     // 闸门在这一帧的等待期间被别处接管：本帧的测量与贴底还没做完，
     // 必须重新挂起待办等释放后补做——直接返回会把「备窗口 + 贴底」整段丢掉，
     // 而 windowPending 已经在帧开头清掉了，没人会再唤醒它
@@ -311,10 +342,12 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
       await flush()
     }
     // 闸门覆盖整个异步帧，不只是取锚点的那一刻；DOM 刷新也可能让页面失活。
+    handleScroll()
     if (disposed || frameRevision !== revision || !host.metrics()) return
     if (isRestoring()) return scheduleWindow()
     if (isFollowing) {
       await scrollToBottom(frameRevision)
+      if (disposed || frameRevision !== revision) return
     } else if (anchor) {
       restoreAnchor(anchor)
       syncWindow()
@@ -332,6 +365,7 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
     if (cancelFrame || isRestoring()) return
     cancelFrame = scheduleFrame(async () => {
       cancelFrame = undefined
+      handleScroll()
       // 排队锚点只对紧接着的这一帧有效：闸门持有者自带锚点，让它接手时这个就该作废
       const queued = takeQueuedAnchor()
       if (disposed || isRestoring()) return
@@ -489,12 +523,14 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
       metrics: () => disposed || !host.metrics() ? undefined : scrollbarSnapshot,
       scrollTo: progress => { void scrollToProgress(progress) },
     },
-    setItems(keys) {
+    setItems(keys, estimates) {
       if (disposed) return
+      // 异步预估完成时用户可能已滚动，但 scroll 事件尚未送达；先更新意图再决定是否贴底。
+      handleScroll()
       // 不变量 6：清单一变，窗口下标指向的记录就可能换人（实时缓冲写满后每来一条就淘汰最早一条），
       // 必须在渲染层提交 DOM 之前把当前阅读位置留下来
       queueAnchor()
-      layout.setItems(keys)
+      layout.setItems(keys, estimates)
       // 与 handleScroll 同理：暂停浏览时换窗要等下一帧先取锚点再补偿。
       // 新日志到达与用户滚动几乎总是交错发生，这里提前发布按新位置算出的窗口，
       // 会把刚进入窗口、尚未实测的长日志的高度差直接变成一次可见跳动
@@ -502,29 +538,7 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
       publish()
       scheduleWindow()
     },
-    handleScroll() {
-      if (disposed) return
-      const metrics = host.metrics()
-      if (!metrics) return
-      const previousScrollTop = lastScrollTop
-      // 模块刚写入的位置会异步产生 scroll，不能把自己的事件当成用户恢复追踪。
-      if (metrics.scrollTop === previousScrollTop) return
-      revision++
-      intent++
-      updateViewingLatest()
-      // 用户往上滚就是在读日志，转入暂停；滚回底部再恢复追踪
-      if (metrics.scrollTop < previousScrollTop) {
-        setFollowing(false)
-      } else if (isViewingLatest) {
-        setFollowing(true)
-      }
-      // 暂停浏览时由下一帧先取旧窗口锚点，再换窗、测量和补偿。
-      // 提前发布新窗口会把未实测长日志的高度差直接变成可见跳动。
-      if (isFollowing) syncWindow()
-      rememberPaused()
-      publish()
-      scheduleWindow()
-    },
+    handleScroll,
     handleResize() {
       if (disposed) return
       const metrics = host.metrics()
@@ -551,6 +565,8 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
     },
     followLatest() {
       if (disposed) return
+      // 点击回底是新意图：点击之前尚未派发的滚动不能反过来取消它。
+      lastScrollTop = host.metrics()?.scrollTop ?? lastScrollTop
       const followRevision = ++revision
       intent++
       setFollowing(true)

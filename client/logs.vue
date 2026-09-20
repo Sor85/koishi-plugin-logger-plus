@@ -91,13 +91,16 @@ import { Time, message, store } from '@koishijs/client'
 import {} from '@koishijs/plugin-config'
 import Logger from 'reggol'
 import ansi from 'ansi_up'
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { LogAnchor } from './log-viewport'
 import { getLogKey } from './log-record'
 import { holdLiveLogTrim } from './live-log-trim'
 import { vOverlayScrollbar } from './overlay-scrollbar'
 import { useLogViewport } from './use-log-viewport'
+import { createPreparedLogList } from './prepared-log-list'
+import { readLogTextLayout } from './log-text-layout'
+import { logPrefixColumns, type LogTextLayout } from './log-height-estimator'
 
 const props = defineProps<{
   logs: Logger.Record[],
@@ -162,6 +165,8 @@ const fallbackLineHeight = 20
 const router = useRouter()
 const logList = ref<HTMLElement | null>(null)
 const logViewport = ref<HTMLElement | null>(null)
+const displayLogs = shallowRef<Logger.Record[]>([])
+const preparingHistory = ref(false)
 const nativeScrollbarWidth = ref(0)
 const logMenu = ref<LogMenuState | null>(null)
 const logMenuElement = ref<HTMLElement | null>(null)
@@ -174,7 +179,26 @@ const { viewport, logWindow, isFollowing, isViewingLatest } = useLogViewport({
   overscan: overscanHeight,
   fallbackLineHeight,
   onStateChange: () => updateNativeScrollbarWidth(),
+  onResize: () => prepareLogs(),
 })
+const preparedLogs = createPreparedLogList({
+  yieldTask: () => new Promise(resolve => setTimeout(resolve, 0)),
+  commit(records, heights) {
+    // 先把新清单与预估交给核心取旧 DOM 锚点，再在同一次 Vue 刷新里替换展示记录。
+    viewport.setItems(records.map(getLogKey), heights)
+    displayLogs.value = records
+  },
+})
+let textLayout: LogTextLayout | undefined
+let typographyObserver: MutationObserver | undefined
+function prepareLogs(recordsChanged = false) {
+  const next = logList.value?.isConnected ? readLogTextLayout(logList.value)
+    : textLayout ?? readLogTextLayout(null)
+  if (!recordsChanged && textLayout?.columns === next.columns
+    && textLayout.lineHeight === next.lineHeight && textLayout.separatorHeight === next.separatorHeight) return
+  textLayout = next
+  void preparedLogs.update(props.logs.slice(), next)
+}
 let pausedPosition: LogAnchor | undefined
 // 暂停浏览期间挂起实时缓冲裁剪：清单前端被削会把用户正在读的那一段直接删掉，
 // 视口内容整体上移、可滚动范围收缩，看起来就是位置被拉回、日志凭空消失
@@ -199,7 +223,7 @@ watch(() => props.resetToken, () => viewport.followLatest())
 const visibleLogs = computed(() => {
   const items: VisibleLog[] = []
   for (let index = logWindow.value.start; index < logWindow.value.end; index++) {
-    const record = props.logs[index]
+    const record = displayLogs.value[index]
     if (!record) continue
     items.push({ key: getLogKey(record), index, record, start: isStart(index) })
   }
@@ -208,7 +232,7 @@ const visibleLogs = computed(() => {
 
 // 更早的日志改为手动加载：滑到顶部才会看到这个入口。是否还有更早记录由会话裁决
 const canLoadMore = computed(() => Boolean(props.canLoadMore))
-const loadingMore = computed(() => Boolean(props.loadingMore))
+const loadingMore = computed(() => Boolean(props.loadingMore) || preparingHistory.value)
 
 // 遮罩至少铺满列表右侧内边距：占位型滚动条按实测宽度盖住，覆盖式滚动条画在内边距上也一并盖住。
 // 内边距区域本来就没有内容，铺同色底不会遮住日志正文
@@ -237,7 +261,16 @@ async function loadBeforeLogs() {
   // 前插会把已加载的日志整体推下去：整个「取一页 + 写入记录」交给 around 执行，
   // 取锚点、改数据、按锚点复位的顺序封在它里面。会话在写入前会核对请求仍属于当前查询，
   // 请求有效性与阅读位置保护分属会话核心与视口核心，两者不互相接管
-  await viewport.around(() => props.loadMore!())
+  preparingHistory.value = true
+  try {
+    await viewport.around(async () => {
+      await props.loadMore!()
+      await nextTick()
+      await preparedLogs.ready()
+    })
+  } finally {
+    preparingHistory.value = false
+  }
 }
 
 function handleScroll() {
@@ -309,6 +342,12 @@ function handleDocumentKeydown(event: KeyboardEvent) {
 }
 
 onMounted(() => {
+  // 字号令牌可能只改变祖先 style/class 而不改变列表盒子宽度，ResizeObserver 捕获不到。
+  // 不观察子树，避免日志换窗本身触发文本预估。
+  typographyObserver = new MutationObserver(() => prepareLogs())
+  for (let element = logList.value; element; element = element.parentElement) {
+    typographyObserver.observe(element, { attributes: true, attributeFilter: ['style', 'class'] })
+  }
   requestAnimationFrame(updateNativeScrollbarWidth)
   document.addEventListener('pointerdown', handleDocumentPointerDown)
   document.addEventListener('keydown', handleDocumentKeydown)
@@ -318,6 +357,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  preparedLogs.dispose()
+  typographyObserver?.disconnect()
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
   document.removeEventListener('keydown', handleDocumentKeydown)
   window.removeEventListener('resize', closeLogMenu)
@@ -345,13 +386,14 @@ onDeactivated(() => {
   pausedPosition = props.preservePausedPositionOnReturn ? viewport.capture() : undefined
 })
 
-// 日志条数变了就要重排窗口。实时推送是就地追加，数组引用不变，因此长度也要一起侦听
-watch([() => props.logs, () => props.logs.length], () => {
-  viewport.setItems(props.logs.map(getLogKey))
+// 实时裁剪可能让长度保持不变，因此同时侦听首尾记录；滚动换窗不会触发文本预估。
+watch([() => props.logs, () => props.logs.length, () => props.logs[0], () => props.logs.at(-1)], () => {
+  prepareLogs(true)
 }, { immediate: true })
 
 function isStart(index: number) {
-  return index > 0 && props.logs[index - 1].id > props.logs[index].id && props.logs[index].name === 'app'
+  const logs = displayLogs.value
+  return index > 0 && logs[index - 1].id > logs[index].id && logs[index].name === 'app'
 }
 
 function formatTime(record: Logger.Record) {
@@ -437,7 +479,7 @@ function renderName(record: Logger.Record) {
 }
 
 function renderContent(record: Logger.Record) {
-  const indent = showTime.length + 5
+  const indent = logPrefixColumns
   return converter.ansi_to_html(` ${record.content.replace(/\n/g, '\n' + ' '.repeat(indent))}`)
 }
 

@@ -5,11 +5,14 @@ import { createLogViewport } from '../client/log-viewport'
 import type { ViewportHost, ViewportLine } from '../client/viewport-host'
 import type { VirtualListWindow } from '../client/virtual-list'
 import { scrollbarGeometry } from '../client/scrollbar-geometry'
+import { createLogHeightEstimator } from '../client/log-height-estimator'
+import type Logger from 'reggol'
 
 interface HarnessOptions {
   keys: string[]
   /** 行的真实渲染高度；正文换行与跨重启的分隔行会让它偏离估算值，宽度变化也会改写它 */
   height?(key: string, width: number): number
+  estimate?(key: string, width: number): number
   estimated?: number
   clientHeight?: number
   clientWidth?: number
@@ -156,7 +159,7 @@ function createHarness(options: HarnessOptions) {
     },
     setItems(next: string[]) {
       pendingKeys = [...next]
-      viewport.setItems(pendingKeys)
+      viewport.setItems(pendingKeys, options.estimate && pendingKeys.map(key => options.estimate!(key, clientWidth)))
     },
     setScrollTop(value: number) {
       scrollTop = Math.min(Math.max(value, 0), maxScrollTop())
@@ -172,7 +175,7 @@ function createHarness(options: HarnessOptions) {
     },
     // 模仿组件挂载：ResizeObserver 立刻回调一次，量下容器宽度与估算行高
     async mount() {
-      viewport.setItems(pendingKeys)
+      viewport.setItems(pendingKeys, options.estimate && pendingKeys.map(key => options.estimate!(key, clientWidth)))
       viewport.handleResize()
       await advance(4)
     },
@@ -963,6 +966,189 @@ test('在长短日志区域往返及重新测量后，滑块长度保持一致',
   harness.viewport.handleResize()
   await harness.advance(8)
   assert.equal(thumb(harness).height, height)
+})
+
+test('文本预估使相同像素滚动在长短日志区产生接近一致的滑块位移', async () => {
+  const records: Logger.Record[] = Array.from({ length: 300 }, (_, id) => ({
+    timestamp: id, id, name: 'x', type: 'info',
+    content: id < 100 ? 'hello' : Array(15).fill('hello').join('\n'),
+  }))
+  const estimator = createLogHeightEstimator(async () => {})
+  const estimates = (await estimator.prepare(records, { columns: 80, lineHeight: 20, separatorHeight: 16 }))!
+  assert.equal(estimates[0], 20)
+  assert.equal(estimates[100], 300)
+  const harness = createHarness({
+    keys: keysOf(300),
+    height: key => Number(key) < 100 ? 20 : 300,
+    estimate: key => estimates[Number(key)],
+    clientHeight: 800,
+  })
+  await harness.mount()
+  const thumbHeight = thumb(harness).height
+  async function movement(from: number) {
+    harness.setScrollTop(from)
+    harness.viewport.handleScroll()
+    await harness.advance(6)
+    const before = thumb(harness).top
+    harness.setScrollTop(harness.scrollTop() + 200)
+    harness.viewport.handleScroll()
+    await harness.advance(6)
+    assert.equal(thumb(harness).height, thumbHeight)
+    return thumb(harness).top - before
+  }
+  const short = await movement(500)
+  const long = await movement(5000)
+  assert.ok(short > 0)
+  assert.ok(Math.abs(short - long) < 1e-6, `短日志移动 ${short}，长日志移动 ${long}`)
+  for (const progress of [0, 0.15, 0.5, 1]) {
+    harness.viewport.scrollbar.scrollTo(progress)
+    await harness.advance(8)
+    assert.ok(Math.abs(thumb(harness).progress - progress) < 1e-5)
+  }
+})
+
+test('预估与实测存在误差时仍不回退，且滑块尺寸不受滚动影响', async () => {
+  const harness = createHarness({
+    keys: keysOf(1000),
+    height: key => Number(key) % 7 ? 20 : 1400,
+    estimate: key => Number(key) % 7 ? 20 : 1200,
+    clientHeight: 800,
+    scrollEvents: true,
+  })
+  await harness.mount()
+  const height = thumb(harness).height
+  let previous = thumb(harness).top
+  for (let step = 0; step < 250; step++) {
+    harness.setScrollTop(harness.scrollTop() - 150)
+    const anchor = harness.firstVisible()!
+    harness.viewport.handleScroll()
+    await harness.advance(4)
+    assert.equal(harness.topOf(anchor.key), anchor.top)
+    assert.equal(thumb(harness).height, height)
+    const top = thumb(harness).top
+    assert.ok(top <= previous + 1e-6)
+    previous = top
+  }
+})
+
+test('预估清单提交的贴底帧尚未结束时滚到顶部，迟到的 scroll 不能让旧帧拉回底部', async () => {
+  let onFlush: (() => void) | undefined
+  const harness = createHarness({
+    keys: keysOf(1000), height: tallHeight, estimate: () => 200,
+    clientHeight: 800, scrollEvents: true, flush: async () => onFlush?.(),
+  })
+  await harness.mount()
+  assert.equal(harness.state().isFollowing, true)
+  harness.setItems(keysOf(1010))
+  onFlush = () => {
+    onFlush = undefined
+    // 浏览器先改变 scrollTop，scroll 事件在后续事件循环才送达。
+    harness.setScrollTop(0)
+  }
+  await harness.advance(5)
+  harness.viewport.handleScroll()
+  await harness.advance(5)
+  assert.equal(harness.scrollTop(), 0)
+  assert.equal(harness.state().window.start, 0)
+  assert.equal(harness.state().isFollowing, false)
+})
+
+test('先滚到顶部但 scroll 尚未送达时提交新预估，此后连续刷新不能重新贴底', async () => {
+  const harness = createHarness({ keys: keysOf(1000), height: tallHeight, estimate: () => 200, clientHeight: 800 })
+  await harness.mount()
+  harness.setScrollTop(0)
+  harness.setItems(keysOf(1010))
+  await harness.advance(8)
+  assert.equal(harness.scrollTop(), 0)
+  assert.equal(harness.state().isFollowing, false)
+  harness.viewport.handleScroll()
+  for (let step = 0; step < 20; step++) {
+    harness.setItems(keysOf(1011 + step))
+    await harness.advance(3)
+    assert.equal(harness.scrollTop(), 0)
+    assert.equal(harness.state().window.start, 0)
+    assert.equal(harness.state().isFollowing, false)
+  }
+})
+
+for (const boundary of [2, 3, 4]) {
+  test(`自动贴底的第 ${boundary} 个 DOM 刷新边界发生未派发的上滚，不能覆盖用户位置`, async () => {
+    let flushes = 0
+    let active = false
+    let moved = false
+    const harness = createHarness({
+      keys: keysOf(1000), height: tallHeight, estimate: () => 200, clientHeight: 800,
+      flush: async () => {
+        if (active && ++flushes === boundary) {
+          moved = true
+          harness.setScrollTop(0)
+        }
+      },
+    })
+    await harness.mount()
+    active = true
+    harness.setItems(keysOf(1010))
+    await harness.advance(10)
+    assert.equal(moved, true, '必须实际经过被测试的异步边界')
+    assert.equal(harness.scrollTop(), 0)
+    assert.equal(harness.state().isFollowing, false)
+  })
+}
+
+test('预估提交与自绘滑块拖顶交错时，旧自动贴底帧不能夺回控制权', async () => {
+  let onFlush: (() => void) | undefined
+  const harness = createHarness({
+    keys: keysOf(1000), height: tallHeight, estimate: () => 200, clientHeight: 800,
+    flush: async () => onFlush?.(),
+  })
+  await harness.mount()
+  harness.setItems(keysOf(1010))
+  onFlush = () => {
+    onFlush = undefined
+    harness.viewport.scrollbar.scrollTo(0)
+  }
+  await harness.advance(10)
+  assert.equal(harness.scrollTop(), 0)
+  assert.equal(thumb(harness).progress, 0)
+  assert.equal(harness.state().isFollowing, false)
+})
+
+test('用户主动点击回底优先于点击前未派发的上滚，但不能压过点击后的上滚', async () => {
+  let onFlush: (() => void) | undefined
+  const harness = createHarness({ keys: keysOf(1000), flush: async () => onFlush?.() })
+  await harness.mount()
+  harness.setScrollTop(0)
+  harness.viewport.followLatest()
+  await harness.advance(8)
+  assert.equal(harness.scrollTop(), harness.scrollHeight() - 200)
+  assert.equal(harness.state().isFollowing, true)
+  harness.viewport.followLatest()
+  onFlush = () => {
+    onFlush = undefined
+    harness.setScrollTop(0)
+  }
+  await harness.advance(8)
+  assert.equal(harness.scrollTop(), 0)
+  assert.equal(harness.state().isFollowing, false)
+})
+
+test('原生位置钳制不能被迟到滚动检测误判成暂停或恢复追踪', async () => {
+  for (const following of [true, false]) {
+    const harness = createHarness({ keys: keysOf(1000) })
+    await harness.mount()
+    if (!following) {
+      harness.setScrollTop(1000)
+      harness.viewport.handleScroll()
+      await harness.advance(4)
+    }
+    harness.setHeight(harness.scrollHeight() - 500)
+    harness.setScrollTop(500)
+    harness.viewport.handleScroll()
+    assert.equal(harness.state().isFollowing, following)
+    harness.viewport.handleResize()
+    await harness.advance(8)
+    assert.equal(harness.state().isFollowing, following)
+  }
 })
 
 test('换窗测量未完成时不发布临时滑块几何', async () => {
