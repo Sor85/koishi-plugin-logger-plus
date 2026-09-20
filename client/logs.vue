@@ -5,7 +5,7 @@
 <template>
   <div class="logger-container">
     <div
-      v-overlay-scrollbar
+      v-overlay-scrollbar="{ source: viewport.scrollbar }"
       ref="logList"
       class="log-list k-text-selectable"
       :style="listStyle"
@@ -95,6 +95,7 @@ import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted,
 import { useRouter } from 'vue-router'
 import type { LogAnchor } from './log-viewport'
 import { getLogKey } from './log-record'
+import { holdLiveLogTrim } from './live-log-trim'
 import { vOverlayScrollbar } from './overlay-scrollbar'
 import { useLogViewport } from './use-log-viewport'
 
@@ -175,6 +176,18 @@ const { viewport, logWindow, isFollowing, isViewingLatest } = useLogViewport({
   onStateChange: () => updateNativeScrollbarWidth(),
 })
 let pausedPosition: LogAnchor | undefined
+// 暂停浏览期间挂起实时缓冲裁剪：清单前端被削会把用户正在读的那一段直接删掉，
+// 视口内容整体上移、可滚动范围收缩，看起来就是位置被拉回、日志凭空消失
+let releaseLiveLogTrim: (() => void) | undefined
+
+watch(isFollowing, (following) => {
+  if (following) {
+    releaseLiveLogTrim?.()
+    releaseLiveLogTrim = undefined
+  } else {
+    releaseLiveLogTrim ??= holdLiveLogTrim()
+  }
+}, { immediate: true })
 
 const listStyle = computed(() => props.maxHeight ? { maxHeight: props.maxHeight } : {})
 
@@ -310,6 +323,8 @@ onUnmounted(() => {
   window.removeEventListener('resize', closeLogMenu)
   window.removeEventListener('resize', updateNativeScrollbarWidth)
   window.removeEventListener('blur', closeLogMenu)
+  releaseLiveLogTrim?.()
+  releaseLiveLogTrim = undefined
 })
 
 onActivated(() => {
@@ -503,7 +518,7 @@ function renderContent(record: Logger.Record) {
   padding: 1rem 1rem;
 
   // 虚拟滚动的占位容器：窗口之外的日志高度全部折进上下内边距，
-  // 因此容器自身高度始终等于全部日志的高度，原生滚动条与自绘滑块都不必特殊处理
+  // 容器总高度由实测行与估算占位共同组成；自绘滑块另用记录坐标，避免实测修正导致回退
   .log-viewport {
     box-sizing: border-box;
   }

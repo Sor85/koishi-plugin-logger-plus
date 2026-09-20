@@ -1,24 +1,29 @@
 /**
  * 日志视口协调。
  *
- * 滚动位置有四个写者：贴底追踪、按锚点复位、按布局粗定位，以及自绘滚动条拖拽。
- * 前三个全部收在这里，由单写者闸门裁决；拖拽不改内容，留在渲染层。
+ * 贴底追踪、按锚点复位与自绘滚动条拖拽都在这里协调，由写入闸门与代次裁决。
+ * 渲染层只处理指针与滑块绘制，不再绕过核心直接写日志容器的 scrollTop。
  *
  * 核心是纯 TypeScript：只通过 ViewportHost 读写滚动几何，不引入 Vue、不碰全局的帧调度，
  * 因此测试可以拿字面量对象充当假容器、手动推进帧，在无 DOM 环境下驱动整套滚动行为。
  *
- * 五条不变量（详见 CONSTRAINTS.md）：
+ * 六条不变量（详见 CONSTRAINTS.md）：
  *
- * 1. 同一时刻只有一处改滚动位置：`around` 与 `restore` 执行期间挂起逐帧的高度修正。
+ * 1. 同一时刻只有一处改滚动位置：按锚点复位期间挂起逐帧的高度修正。闸门只覆盖真正在写位置的
+ *    那一段，不覆盖等待网络的那一段——关着闸门等请求会把渲染窗口冻在原地。
  * 2. 实测高度写回会改变占位高度，视口内容随之移动，因此锚点必须在写回之前取。
  * 3. `contentTop` 是布局值，占位只能用内边距；改用位移变换会让换算整段偏掉。
  * 4. 只有容器宽度变化才丢弃实测高度，高度变化不丢。
  * 5. 找不到锚点时不强行恢复，保持当前位置。
+ * 6. 清单变化本身会移动视口内容，因此锚点要在渲染层提交 DOM 之前（即 `setItems` 当时）取，
+ *    不能等到下一帧——那时视口已经跳过一次了。
  */
 
 import type { ViewportHost } from './viewport-host'
 import type { VirtualListWindow } from './virtual-list'
 import { createVirtualListLayout } from './virtual-list'
+import { logScrollbarMetrics, logScrollOffset } from './log-scrollbar'
+import type { ScrollbarMetrics, ScrollbarSource } from './scrollbar-geometry'
 
 /**
  * 视口内第一条可见日志的稳定标识与相对偏移。
@@ -57,7 +62,9 @@ export interface LogViewportOptions {
 }
 
 export interface LogViewport {
-  /** 更新日志清单，已实测高度按标识继续沿用 */
+  /** 自绘滑块的记录坐标与拖拽入口，不使用正在变化的 DOM 总高度比例 */
+  scrollbar: ScrollbarSource
+  /** 更新日志清单，已实测高度按标识继续沿用；须在渲染层提交 DOM 之前调用 */
   setItems(keys: string[]): void
   handleScroll(): void
   handleResize(): void
@@ -75,6 +82,18 @@ export interface LogViewport {
 // 停在离底部这个距离之内就算「正在看最新日志」，滚动条不必压到最底
 const latestThreshold = 64
 
+/**
+ * 清单变更前记下的阅读位置。
+ *
+ * 只存锚点不够：取锚点与真正复位之间隔着至少一帧，这期间用户可能又滚了一段。
+ * 连同当时的滚动位置一起记，复位时按「现在滚到哪 - 当时滚到哪」把目标偏移平移过去，
+ * 既撤掉清单变化造成的位移，又保留用户自己滚出来的位移。
+ */
+interface QueuedAnchor {
+  anchor: LogAnchor
+  scrollTop: number
+}
+
 export function createLogViewport(options: LogViewportOptions): LogViewport {
   const { host, schedule, flush, onStateChange } = options
   const layout = createVirtualListLayout(options.fallbackLineHeight)
@@ -86,6 +105,7 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
   let lastScrollTop = 0
   let listWidth = 0
   let pausedAnchor: LogAnchor | undefined
+  let queuedAnchor: QueuedAnchor | undefined
   let cancelFrame: (() => void) | undefined
   let windowPending = false
   let resizePending = false
@@ -96,6 +116,20 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
   let writers = 0
   // await 之后闸门可能已重新打开，但旧帧的锚点仍然过期；代次负责作废这类续体。
   let revision = 0
+  // 用户意图代次：只有用户滚动与显式回底会推进它，内部换窗与测量补偿不算。
+  // 读一页历史要跨很多帧，其间到底是「用户自己接管了位置」还是「只是逐帧补偿跑过几轮」，
+  // 只能靠它分辨；revision 被内部补偿频繁推进，判不出用户意图。
+  let intent = 0
+  let scrollbarSnapshot: ScrollbarMetrics | undefined
+  const scrollbarListeners = new Set<() => void>()
+
+  function updateScrollbar() {
+    if (disposed || isRestoring() || queuedAnchor) return
+    const metrics = host.metrics()
+    if (!metrics) return
+    scrollbarSnapshot = logScrollbarMetrics(layout, metrics)
+    for (const listener of scrollbarListeners) listener()
+  }
 
   function isRestoring() {
     return writers > 0
@@ -103,6 +137,7 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
 
   function releaseWriter() {
     writers--
+    updateScrollbar()
     if (!isRestoring() && windowPending) scheduleWindow()
   }
 
@@ -149,6 +184,33 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
     if (!line) return false
     scrollTo(metrics.scrollTop + line.top - anchor.offset)
     return true
+  }
+
+  /**
+   * 不变量 6：清单变更之前先把阅读位置留下来。
+   *
+   * 渲染层在提交 DOM 之前调用 `setItems`，此刻读到的还是变更前的真实位置。等到下一帧再取就晚了：
+   * 实时缓冲写满之后每来一条新日志就从头部淘汰最早一条，窗口下标没变、里面的内容却整体前移，
+   * 视口已经先跳过一次，再取锚点只会把这次跳动固化下来。
+   *
+   * 闸门关着时不排队：位置归闸门持有者负责，排一个它看不见的锚点只会互相打架。
+   */
+  function queueAnchor() {
+    if (isFollowing || queuedAnchor || isRestoring()) return
+    const metrics = host.metrics()
+    if (!metrics) return
+    const anchor = captureAnchor()
+    if (anchor) queuedAnchor = { anchor, scrollTop: metrics.scrollTop }
+  }
+
+  // 取出排队锚点并按这期间用户滚过的距离平移；取出即作废，过期锚点不留到下一帧
+  function takeQueuedAnchor(): LogAnchor | undefined {
+    const queued = queuedAnchor
+    queuedAnchor = undefined
+    if (!queued) return undefined
+    const metrics = host.metrics()
+    if (!metrics) return queued.anchor
+    return { key: queued.anchor.key, offset: queued.anchor.offset - (metrics.scrollTop - queued.scrollTop) }
   }
 
   // 按当前滚动位置算出要渲染的日志区间。窗口吃的是内容坐标而非滚动位置：
@@ -203,6 +265,7 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
     if (!current) return
     scrollTo(Math.max(0, current.scrollHeight - current.clientHeight))
     updateViewingLatest()
+    updateScrollbar()
   }
 
   // 量窗口内各行的真实高度，返回偏移是否需要重算
@@ -217,7 +280,10 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
   function setFollowing(value: boolean) {
     if (isFollowing === value) return
     isFollowing = value
-    if (value) pausedAnchor = undefined
+    if (value) {
+      pausedAnchor = undefined
+      queuedAnchor = undefined
+    }
   }
 
   // 用户仍停留在页面且处于暂停状态时持续刷新最后稳定位置：
@@ -234,14 +300,19 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
    * 不变量 2：锚点由调用方在改动之前取好传进来；追踪最新日志时不需要锚点，重新贴底即可。
    */
   async function settle(anchor: LogAnchor | undefined, frameRevision: number) {
-    if (disposed || isRestoring() || frameRevision !== revision || !host.metrics()) return
+    // 闸门在这一帧的等待期间被别处接管：本帧的测量与贴底还没做完，
+    // 必须重新挂起待办等释放后补做——直接返回会把「备窗口 + 贴底」整段丢掉，
+    // 而 windowPending 已经在帧开头清掉了，没人会再唤醒它
+    if (disposed || frameRevision !== revision || !host.metrics()) return
+    if (isRestoring()) return scheduleWindow()
     if (measureLines()) {
       syncWindow()
       publish()
       await flush()
     }
     // 闸门覆盖整个异步帧，不只是取锚点的那一刻；DOM 刷新也可能让页面失活。
-    if (disposed || isRestoring() || frameRevision !== revision || !host.metrics()) return
+    if (disposed || frameRevision !== revision || !host.metrics()) return
+    if (isRestoring()) return scheduleWindow()
     if (isFollowing) {
       await scrollToBottom(frameRevision)
     } else if (anchor) {
@@ -251,6 +322,7 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
     updateViewingLatest()
     rememberPaused()
     publish()
+    updateScrollbar()
   }
 
   function scheduleWindow() {
@@ -260,6 +332,8 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
     if (cancelFrame || isRestoring()) return
     cancelFrame = scheduleFrame(async () => {
       cancelFrame = undefined
+      // 排队锚点只对紧接着的这一帧有效：闸门持有者自带锚点，让它接手时这个就该作废
+      const queued = takeQueuedAnchor()
       if (disposed || isRestoring()) return
       windowPending = false
       if (resizePending) {
@@ -271,13 +345,13 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
       }
       const frameRevision = revision
       // 不变量 1：恢复位置期间不取锚点也不改位置，让出这一帧
-      const anchor = !isFollowing ? captureAnchor() : undefined
-      if (anchor) {
-        // 新进入窗口的多行日志尚未实测，换窗本身就可能移动内容。
-        // 必须沿用换窗前的锚点完成测量与定位，不能在换窗后重新取锚点。
-        await restore(anchor, true)
-        return
-      }
+      // 不变量 6：清单刚变过就用变更前排下的锚点，此刻现取只会读到已经跳过的位置
+      const anchor = !isFollowing ? queued ?? captureAnchor() : undefined
+      // 新进入窗口的多行日志尚未实测，换窗本身就可能移动内容。
+      // 必须沿用换窗前的锚点完成测量与定位，不能在换窗后重新取锚点。
+      // 锚点那条日志已被淘汰出清单时 restore 不接管，此时仍要把窗口刷到当前位置，
+      // 否则这一帧的待办已经清掉，窗口会一直停在旧区间
+      if (anchor && await restore(anchor, true)) return
       syncWindow()
       publish()
       await flush()
@@ -320,9 +394,10 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
    */
   const restoreRounds = 3
 
+  /** 返回是否真的接管了滚动位置：锚点那条日志已不在清单里时不接管，调用方须自己把窗口刷新掉 */
   async function restore(anchor?: LogAnchor, scrolling = false) {
     const metrics = host.metrics()
-    if (disposed || !metrics || !anchor || layout.indexOf(anchor.key) < 0) return
+    if (disposed || !metrics || !anchor || layout.indexOf(anchor.key) < 0) return false
     // 普通滚动的换窗补偿不是导航：浏览器可能先滚动、稍后才派发 scroll。
     // 仅核对 revision 不足以发现这段移动；旧帧必须让路，不能把用户拉回取锚点时的位置。
     const interrupted = () => {
@@ -360,13 +435,70 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
     } finally {
       releaseWriter()
     }
+    return true
+  }
+
+  async function scrollToProgress(progress: number) {
+    const metrics = host.metrics()
+    if (disposed || !metrics || !Number.isFinite(progress)) return
+    const target = Math.max(0, Math.min(1, progress))
+    const navigationRevision = ++revision
+    intent++
+    queuedAnchor = undefined
+    setFollowing(target === 1)
+    writers++
+    const bottomInset = Math.max(0, metrics.scrollHeight - metrics.contentTop - layout.totalHeight())
+    const superseded = () => disposed || navigationRevision !== revision || !host.metrics()
+    const targetOffset = () => {
+      const current = host.metrics()!
+      return logScrollOffset(layout, {
+        ...current,
+        scrollHeight: current.contentTop + layout.totalHeight() + bottomInset,
+      }, target)
+    }
+    try {
+      // 拖到未测量的历史区时先渲染、测量、重新反算同一个记录比例。
+      // 与锚点恢复一样，收敛前不写 scrollTop，避免把估算落点展示给用户。
+      for (let round = 0; round < 6; round++) {
+        syncWindow(targetOffset() - host.metrics()!.contentTop)
+        publish()
+        await flush()
+        if (superseded()) return
+        if (!measureLines()) break
+      }
+      syncWindow(targetOffset() - host.metrics()!.contentTop)
+      publish()
+      await flush()
+      if (superseded()) return
+      scrollTo(targetOffset())
+      updateViewingLatest()
+      rememberPaused()
+      publish()
+    } finally {
+      releaseWriter()
+    }
   }
 
   return {
+    scrollbar: {
+      subscribe(listener) {
+        scrollbarListeners.add(listener)
+        return () => { scrollbarListeners.delete(listener) }
+      },
+      // 不暴露换窗、实测与补偿之间的临时几何，否则滑块仍会闪回一次。
+      metrics: () => disposed || !host.metrics() ? undefined : scrollbarSnapshot,
+      scrollTo: progress => { void scrollToProgress(progress) },
+    },
     setItems(keys) {
       if (disposed) return
+      // 不变量 6：清单一变，窗口下标指向的记录就可能换人（实时缓冲写满后每来一条就淘汰最早一条），
+      // 必须在渲染层提交 DOM 之前把当前阅读位置留下来
+      queueAnchor()
       layout.setItems(keys)
-      syncWindow()
+      // 与 handleScroll 同理：暂停浏览时换窗要等下一帧先取锚点再补偿。
+      // 新日志到达与用户滚动几乎总是交错发生，这里提前发布按新位置算出的窗口，
+      // 会把刚进入窗口、尚未实测的长日志的高度差直接变成一次可见跳动
+      if (isFollowing) syncWindow()
       publish()
       scheduleWindow()
     },
@@ -378,6 +510,7 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
       // 模块刚写入的位置会异步产生 scroll，不能把自己的事件当成用户恢复追踪。
       if (metrics.scrollTop === previousScrollTop) return
       revision++
+      intent++
       updateViewingLatest()
       // 用户往上滚就是在读日志，转入暂停；滚回底部再恢复追踪
       if (metrics.scrollTop < previousScrollTop) {
@@ -419,8 +552,10 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
     followLatest() {
       if (disposed) return
       const followRevision = ++revision
+      intent++
       setFollowing(true)
       isViewingLatest = true
+      queuedAnchor = undefined
       publish()
       void flush().then(() => {
         if (disposed) return
@@ -432,31 +567,51 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
         })
       })
     },
+    /**
+     * 把会前插内容的变更交给它执行。
+     *
+     * 闸门只覆盖「内容已改、位置还没修」的那一小段，不覆盖等请求的那一大段：
+     * 读一页历史要跨很多帧，关着闸门等下去，渲染窗口就冻在请求开始时的位置——
+     * 用户继续滚只会滚进一片空白，请求回来还会被拉回旧锚点。请求在途期间内容尚未改变，
+     * 本来就不需要独占滚动位置，逐帧的锚点补偿照常跟着用户走。
+     */
     async around(change) {
       if (disposed) return
       // 不变量 2：锚点必须在内容变更之前取，否则读到的是移动后的位置，修正等于没做
       const anchor = captureAnchor()
-      // change 可以跨越多帧，闸门必须在调用它之前关闭，异常时也要释放。
-      writers++
-      const changeRevision = ++revision
+      const wasFollowing = isFollowing
+      const changeIntent = intent
+      // 手动加载历史意味着要停下来读，因此立刻暂停追踪：等内容落地再暂停就晚了，
+      // 中间的窗口刷新会先把视口贴到底部，用户看到的就是「跳到底再弹回来」
+      if (anchor) {
+        setFollowing(false)
+        pausedAnchor = anchor
+      }
+      revision++
       try {
         await change()
-        if (disposed) return
+      } catch (error) {
+        // 加载失败时把暂停一并回滚：用户没得到历史，追踪状态就该回到点击之前
+        if (wasFollowing && changeIntent === intent) {
+          setFollowing(true)
+          publish()
+          scheduleWindow()
+        }
+        throw error
+      }
+      if (disposed) return
+      // 内容已落地，从这里开始独占，避免逐帧修正与复位互相打断
+      writers++
+      try {
         await flush()
         if (disposed) return
         await nextFrame()
         if (disposed) return
-        // 等待期间的新操作优先，旧事务不能通过 restore 再开代次夺回控制权。
-        if (changeRevision === revision) {
-          // 成功加载历史后继续阅读，而不是沿用不足一屏时的自动追踪状态。
-          // 空列表首次加载没有锚点，仍应贴底；等待期间的显式回底由新代次优先处理。
-          if (anchor) {
-            setFollowing(false)
-            pausedAnchor = anchor
-          }
+        // 等待期间用户可能已经自己接管了位置：显式回底就不复位，改读别处就按新位置复位
+        if (changeIntent !== intent) {
+          if (!isFollowing) await restore(pausedAnchor ?? anchor)
+        } else {
           await restore(anchor)
-        } else if (!isFollowing) {
-          await restore(pausedAnchor)
         }
       } finally {
         releaseWriter()
@@ -467,11 +622,13 @@ export function createLogViewport(options: LogViewportOptions): LogViewport {
       return pausedAnchor
     },
     restore(anchor) {
-      return restore(anchor ?? pausedAnchor)
+      return restore(anchor ?? pausedAnchor).then(() => {})
     },
     dispose() {
       disposed = true
       revision++
+      scrollbarListeners.clear()
+      queuedAnchor = undefined
       for (const cancel of pendingFrames) cancel()
       cancelFrame = undefined
     },

@@ -1,3 +1,6 @@
+import type { ScrollbarSource } from './scrollbar-geometry'
+import { draggedProgress, scrollbarGeometry } from './scrollbar-geometry'
+
 const edgeGap = 8
 const overlayInset = 0
 const overlayWidth = 10
@@ -16,7 +19,11 @@ interface OverlayScrollbarState {
   focused: boolean
   dragging: boolean
   dragStartY: number
-  dragStartScrollTop: number
+  dragStartProgress: number
+  dragProgress: number
+  dragTravel: number
+  source?: ScrollbarSource
+  unsubscribe?: () => void
   trackHeight: number
   thumbHeight: number
   cleanup: Array<() => void>
@@ -24,6 +31,7 @@ interface OverlayScrollbarState {
 
 export interface OverlayScrollbarOptions {
   hideOnNarrow?: boolean
+  source?: ScrollbarSource
 }
 
 interface OverlayScrollbarBinding<Value> {
@@ -71,13 +79,20 @@ function scheduleHide(state: OverlayScrollbarState) {
   }, hideDelay)
 }
 
+function scrollMetrics(state: OverlayScrollbarState) {
+  if (state.source) return state.source.metrics()
+  const { element } = state
+  return { offset: element.scrollTop, viewport: element.clientHeight, total: element.scrollHeight }
+}
+
 function updateScrollbar(state: OverlayScrollbarState) {
   state.frame = 0
   const { element, overlay } = state
   const rect = element.getBoundingClientRect()
   const trackHeight = Math.max(0, rect.height - edgeGap * 2)
-  const maxScrollTop = element.scrollHeight - element.clientHeight
-  const isUsable = element.isConnected && rect.width > 0 && trackHeight > 0 && maxScrollTop > 1
+  const metrics = scrollMetrics(state)
+  const isUsable = element.isConnected && rect.width > 0 && trackHeight > 0
+    && metrics && metrics.total - metrics.viewport > 0
 
   if (!isUsable) {
     setVisible(state, false)
@@ -85,10 +100,13 @@ function updateScrollbar(state: OverlayScrollbarState) {
     return
   }
 
+  const geometry = scrollbarGeometry(metrics, trackHeight, minThumbHeight)
   state.trackHeight = trackHeight
-  state.thumbHeight = Math.max(minThumbHeight, trackHeight * element.clientHeight / element.scrollHeight)
-  const maxThumbTop = Math.max(0, trackHeight - state.thumbHeight)
-  const thumbTop = maxScrollTop ? element.scrollTop / maxScrollTop * maxThumbTop : 0
+  // 拖拽期间尺寸与比例均固定在按下时的轨道上，实测高度不能把滑块从指针下挪走。
+  if (!state.dragging) state.thumbHeight = geometry.height
+  const thumbTop = state.dragging
+    ? state.dragProgress * Math.max(0, trackHeight - state.thumbHeight)
+    : geometry.top
 
   overlay.style.left = `${Math.round(rect.right - overlayWidth - overlayInset)}px`
   overlay.style.top = `${Math.round(rect.top + edgeGap)}px`
@@ -114,16 +132,17 @@ function showScrollbarBriefly(state: OverlayScrollbarState) {
 }
 
 function updateDraggedScrollTop(state: OverlayScrollbarState, clientY: number) {
-  const maxScrollTop = state.element.scrollHeight - state.element.clientHeight
-  const maxThumbTop = Math.max(1, state.trackHeight - state.thumbHeight)
-  const delta = clientY - state.dragStartY
-  state.element.scrollTop = state.dragStartScrollTop + delta / maxThumbTop * maxScrollTop
+  const progress = draggedProgress(state.dragStartProgress, clientY - state.dragStartY, state.dragTravel)
+  state.dragProgress = progress
+  if (state.source) state.source.scrollTo(progress)
+  else state.element.scrollTop = progress * Math.max(0, state.element.scrollHeight - state.element.clientHeight)
 }
 
 function stopDragging(state: OverlayScrollbarState) {
   state.dragging = false
   state.thumb.classList.remove('is-dragging')
   state.overlay.classList.remove('is-wide')
+  scheduleUpdate(state)
   scheduleHide(state)
 }
 
@@ -144,6 +163,11 @@ function applyScrollbarOptions(
 ) {
   const { overlay } = state
   overlay.classList.toggle('is-hidden-on-narrow', Boolean(binding.value?.hideOnNarrow))
+  if (state.source !== binding.value?.source) {
+    state.unsubscribe?.()
+    state.source = binding.value?.source
+    state.unsubscribe = state.source?.subscribe(() => scheduleUpdate(state))
+  }
 }
 
 export const vOverlayScrollbar: OverlayScrollbarDirective<HTMLElement, OverlayScrollbarOptions | undefined> = {
@@ -161,7 +185,9 @@ export const vOverlayScrollbar: OverlayScrollbarDirective<HTMLElement, OverlaySc
       focused: false,
       dragging: false,
       dragStartY: 0,
-      dragStartScrollTop: 0,
+      dragStartProgress: 0,
+      dragProgress: 0,
+      dragTravel: 0,
       trackHeight: 0,
       thumbHeight: 0,
       cleanup: [],
@@ -195,9 +221,17 @@ export const vOverlayScrollbar: OverlayScrollbarDirective<HTMLElement, OverlaySc
       if (!(event instanceof PointerEvent)) return
       event.preventDefault()
       event.stopPropagation()
+      const metrics = scrollMetrics(state)
+      if (!metrics) return
+      const track = Math.max(0, element.getBoundingClientRect().height - edgeGap * 2)
+      const geometry = scrollbarGeometry(metrics, track, minThumbHeight)
+      state.trackHeight = track
+      state.thumbHeight = geometry.height
       state.dragging = true
       state.dragStartY = event.clientY
-      state.dragStartScrollTop = element.scrollTop
+      state.dragStartProgress = geometry.progress
+      state.dragProgress = geometry.progress
+      state.dragTravel = track - geometry.height
       thumb.classList.add('is-dragging')
       overlay.classList.add('is-visible', 'is-wide')
       scheduleUpdate(state)
@@ -268,6 +302,7 @@ export const vOverlayScrollbar: OverlayScrollbarDirective<HTMLElement, OverlaySc
     if (state.frame) window.cancelAnimationFrame(state.frame)
     state.resizeObserver?.disconnect()
     state.mutationObserver?.disconnect()
+    state.unsubscribe?.()
     for (const cleanup of state.cleanup) cleanup()
     state.overlay.remove()
   },

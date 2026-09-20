@@ -29,6 +29,10 @@ export interface VirtualListLayout {
   indexOf(key: string): number
   /** 条目顶部相对列表内容顶部的偏移 */
   offsetOf(index: number): number
+  /** 像素偏移转成「记录下标 + 行内比例」，不受其他行估算高度修正影响 */
+  positionAt(offset: number): number
+  /** 按统一估算行高计算的全量高度；不随逐行实测变化，用于稳定滑块尺寸 */
+  estimatedTotalHeight(): number
   /** 全部条目的总高度 */
   totalHeight(): number
   /** 实测高度的缓存条数，仅供守卫测试断言缓存不会无限增长 */
@@ -136,6 +140,16 @@ export function createVirtualListLayout(estimatedHeight: number): VirtualListLay
       ensureOffsets()
       if (index <= 0) return 0
       return offsets[Math.min(index, keys.length)]
+    },
+    positionAt(offset) {
+      ensureOffsets()
+      if (offset <= 0 || !keys.length) return 0
+      if (offset >= offsets[keys.length]) return keys.length
+      const index = findIndexAtOffset(offset)
+      return index + (offset - offsets[index]) / heightAt(index)
+    },
+    estimatedTotalHeight() {
+      return keys.length * estimate
     },
     totalHeight() {
       ensureOffsets()
